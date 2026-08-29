@@ -2,6 +2,7 @@ using System.Reflection;
 using BepInEx;
 using BepInEx.Logging;
 using HarmonyLib;
+using UltraCinematic.Configuration;
 using UltraCinematic.Core;
 using UnityEngine;
 
@@ -10,14 +11,16 @@ namespace UltraCinematic
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     public sealed class UltraCinematicPlugin : BaseUnityPlugin
     {
-        public const string PluginGuid = "kiril.ultracinematic"; public const string PluginName = "UltraCinematic"; public const string PluginVersion = "1.4.2";
+        public const string PluginGuid = "kiril.ultracinematic"; public const string PluginName = "UltraCinematic"; public const string PluginVersion = "1.5.1";
         internal static CinematicController Controller { get; private set; } internal static ManualLogSource Log { get; private set; }
+        internal static UltraCinematicPreferences Preferences { get; private set; }
         private Harmony harmony;
         private bool applicationQuitting;
         private void Awake()
         {
             DontDestroyOnLoad(gameObject);
             Log = Logger;
+            Preferences = new UltraCinematicPreferences(Config);
             harmony = new Harmony(PluginGuid); harmony.PatchAll(typeof(UltraCinematicPlugin).Assembly);
             Logger.LogInfo("UltraCinematic loaded.");
             Logger.LogInfo("Assembly path: " + Assembly.GetExecutingAssembly().Location);
@@ -51,6 +54,7 @@ namespace UltraCinematic
                 return;
             }
             Controller = null;
+            Preferences = null;
         }
     }
 }

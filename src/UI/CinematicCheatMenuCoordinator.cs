@@ -96,6 +96,10 @@ namespace UltraCinematic.UI
                 }
                 else continue;
 
+                Transform slotTextTransform = pair.Value.transform.Find("Slot Text");
+                Text slotText = slotTextTransform == null ? null : slotTextTransform.GetComponent<Text>();
+                if (slotText != null) slotText.text = pair.Key.LongName;
+
                 LastMatchedRowCount++;
                 if (id != "ultracinematic.edit-mode" && visible) LastVisibleActionRowCount++;
                 pair.Value.gameObject.SetActive(visible);

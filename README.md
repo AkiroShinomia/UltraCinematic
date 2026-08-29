@@ -19,7 +19,10 @@
 - воспроизведение в работающем или полностью замороженном мире;
 - `Pause Game` с отдельным свободным перемещением камеры на остановленном времени;
 - именованные сохранения Timeline, привязанные к конкретному уровню;
-- загрузка, перезапись, удаление и безопасная очистка проектов.
+- загрузка, перезапись, удаление и безопасная очистка проектов;
+- интерфейс на русском и английском языках;
+- стили Timeline `Classic` и `Dark`;
+- меню настроек с изменяемой папкой сохранений.
 
 ### Использование
 
@@ -45,19 +48,30 @@ Soft Points работают с любым сочетанием Path. Для в�
 - `FROZEN WORLD` — мир, физика, частицы и снаряды остановлены, а пролётка идёт по unscaled time.
 - `Pause Game` — останавливает время и включает свободное управление: мышь, WASD, Space/Ctrl по вертикали и Shift для ускорения.
 
-Если пролётка была запущена из активного `Pause Game`, после её завершения или ручной остановки восстанавливаются исходные позиция, камера, FOV и замороженное состояние мира.
+Если Timeline был открыт из активного `Pause Game`, заморозка восстанавливается после закрытия Timeline, завершения пролётки или её ручной остановки. Точки, созданные во время свободного перемещения на паузе, записываются из точного состояния камеры.
 
 ### Сохранения
 
 Кнопки `SAVE`, `LOAD` и `CLEAR` находятся в верхней части Timeline. Проект сохраняет все точки, Position/Rotation/FOV, Path/Easing, Flight Time, режим времени и Soft Points.
 
-Сейвы хранятся в:
+По умолчанию сейвы хранятся в:
 
 ```text
 BepInEx/config/UltraCinematic/Timelines
 ```
 
 Каждый проект привязан к идентификатору активного уровня. Сейвы другого уровня не отображаются и не могут быть загружены. Перед загрузкой файл полностью проверяется, и только затем текущий Timeline заменяется.
+
+### Настройки интерфейса
+
+Кнопка `НАСТРОЙКИ` расположена рядом с крестиком закрытия Timeline. В ней можно:
+
+- переключить весь интерфейс UltraCinematic между русским и английским языками;
+- выбрать стиль Timeline `Classic` или `Dark`;
+- посмотреть текущую папку проектов;
+- указать другую абсолютную папку сохранений или вернуть стандартную.
+
+Язык, стиль и выбранный путь сохраняются между запусками игры. При смене папки существующие проекты автоматически не перемещаются.
 
 ### Сборка и установка
 
@@ -95,7 +109,10 @@ dotnet build -c Release -p:GameDir="D:\Games\ULTRAKILL"
 - playback in a live or completely frozen world;
 - `Pause Game` with a separate free-camera controller on frozen time;
 - named, level-specific Timeline saves;
-- load, overwrite, delete, and safely clear projects.
+- load, overwrite, delete, and safely clear projects;
+- complete English and Russian interfaces;
+- `Classic` and `Dark` Timeline styles;
+- a settings menu with a configurable save directory.
 
 ### Usage
 
@@ -121,19 +138,30 @@ Soft Points work with every Path combination. Internal points expose independent
 - `FROZEN WORLD` freezes gameplay, physics, particles, and projectiles while playback advances on unscaled time.
 - `Pause Game` freezes time and enables free movement with mouse, WASD, Space/Ctrl vertically, and Shift for higher speed.
 
-When playback starts from an active `Pause Game`, automatic completion and manual stop both restore the original pose, camera, FOV, and frozen-world state.
+When the Timeline is opened from an active `Pause Game`, the frozen state is restored after closing the Timeline, finishing playback, or stopping it manually. Camera Points created while moving in Pause Game use the free camera's exact state.
 
 ### Saves
 
 The Timeline header contains `SAVE`, `LOAD`, and `CLEAR`. A project stores all points, Position/Rotation/FOV values, Path/Easing modes, Flight Time, time mode, and Soft Point settings.
 
-Save files are stored under:
+By default, save files are stored under:
 
 ```text
 BepInEx/config/UltraCinematic/Timelines
 ```
 
 Each project is bound to the active level identity. Saves from another level are neither listed nor loadable. A file is fully validated before it can replace the current in-memory Timeline.
+
+### Interface settings
+
+The `SETTINGS` button is located next to the Timeline close icon. It can be used to:
+
+- switch the entire UltraCinematic interface between English and Russian;
+- select the `Classic` or `Dark` Timeline style;
+- inspect the current project directory;
+- set another absolute save directory or restore the default.
+
+Language, style, and the selected path persist across game restarts. Existing projects are not moved automatically when the directory changes.
 
 ### Build and installation
 

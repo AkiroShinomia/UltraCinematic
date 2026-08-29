@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using BepInEx;
 using Newtonsoft.Json;
+using UltraCinematic.Configuration;
 using UltraCinematic.Data;
 using UltraCinematic.Timeline;
 using UnityEngine;
@@ -54,7 +55,21 @@ namespace UltraCinematic.Persistence
     internal sealed class TimelineSaveRepository
     {
         private const int SchemaVersion = 1;
-        private readonly string root = Path.Combine(Paths.ConfigPath, "UltraCinematic", "Timelines");
+        private string root;
+
+        internal TimelineSaveRepository(string rootDirectory)
+        {
+            SetRootDirectory(rootDirectory);
+        }
+
+        internal string RootDirectory => root;
+
+        internal void SetRootDirectory(string rootDirectory)
+        {
+            root = string.IsNullOrWhiteSpace(rootDirectory)
+                ? Path.Combine(Paths.ConfigPath, "UltraCinematic", "Timelines")
+                : Path.GetFullPath(rootDirectory);
+        }
 
         internal string CurrentLevelName => SceneManager.GetActiveScene().name;
 
@@ -77,7 +92,7 @@ namespace UltraCinematic.Persistence
                 }
                 result.Sort((a, b) => b.Data.ModifiedUtcTicks.CompareTo(a.Data.ModifiedUtcTicks));
             }
-            catch (Exception exception) { error = "Could not list saves: " + exception.Message; }
+            catch (Exception exception) { error = UiText.T("Could not list saves: ", "Не удалось получить список сохранений: ") + exception.Message; }
             return result;
         }
 
@@ -91,7 +106,7 @@ namespace UltraCinematic.Persistence
             if (listError.Length > 0) { error = listError; return false; }
             if (existing.Exists(entry => string.Equals(entry.Data.ProjectName, normalizedName, StringComparison.OrdinalIgnoreCase)))
             {
-                error = "A save with this name already exists. Use OVERWRITE in LOAD.";
+                error = UiText.T("A save with this name already exists. Use OVERWRITE in LOAD.", "Сохранение с таким именем уже существует. Используйте ПЕРЕЗАПИСАТЬ в меню ЗАГРУЗИТЬ.");
                 return false;
             }
 
@@ -101,7 +116,7 @@ namespace UltraCinematic.Persistence
 
         internal bool Overwrite(TimelineSaveEntry entry, CinematicTimeline timeline, out string error)
         {
-            if (entry == null || entry.Data == null) { error = "Save entry is unavailable."; return false; }
+            if (entry == null || entry.Data == null) { error = UiText.T("Save entry is unavailable.", "Сохранение недоступно."); return false; }
             TimelineProjectData data = Capture(timeline, entry.Data.ProjectName, entry.Data.ProjectId);
             return Write(data, entry.FilePath, out error);
         }
@@ -109,19 +124,19 @@ namespace UltraCinematic.Persistence
         internal bool Delete(TimelineSaveEntry entry, out string error)
         {
             error = "";
-            if (entry == null || string.IsNullOrEmpty(entry.FilePath)) { error = "Save entry is unavailable."; return false; }
+            if (entry == null || string.IsNullOrEmpty(entry.FilePath)) { error = UiText.T("Save entry is unavailable.", "Сохранение недоступно."); return false; }
             try
             {
                 if (File.Exists(entry.FilePath)) File.Delete(entry.FilePath);
                 return true;
             }
-            catch (Exception exception) { error = "Could not delete save: " + exception.Message; return false; }
+            catch (Exception exception) { error = UiText.T("Could not delete save: ", "Не удалось удалить сохранение: ") + exception.Message; return false; }
         }
 
         internal bool Apply(TimelineSaveEntry entry, CinematicTimeline timeline, out string error)
         {
             error = "";
-            if (entry == null || entry.Data == null) { error = "Save entry is unavailable."; return false; }
+            if (entry == null || entry.Data == null) { error = UiText.T("Save entry is unavailable.", "Сохранение недоступно."); return false; }
             string validationError = Validate(entry.Data, CurrentLevelId());
             if (validationError.Length > 0) { error = validationError; return false; }
 
@@ -203,7 +218,7 @@ namespace UltraCinematic.Persistence
             }
             catch (Exception exception)
             {
-                error = "Could not write save: " + exception.Message;
+                error = UiText.T("Could not write save: ", "Не удалось записать сохранение: ") + exception.Message;
                 try { if (!string.IsNullOrEmpty(temporaryPath) && File.Exists(temporaryPath)) File.Delete(temporaryPath); } catch { }
                 return false;
             }
@@ -221,7 +236,7 @@ namespace UltraCinematic.Persistence
                 {
                     data.Points = new TimelinePointData[0];
                     data.Segments = new TimelineSegmentData[0];
-                    warning = "Legacy 1.4.0 save: point data was not written and cannot be recovered.";
+                    warning = UiText.T("Legacy 1.4.0 save: point data was not written and cannot be recovered.", "Старое сохранение 1.4.0: данные точек не были записаны и не могут быть восстановлены.");
                 }
                 error = Validate(data, expectedLevelId);
                 return error.Length == 0;
@@ -231,28 +246,28 @@ namespace UltraCinematic.Persistence
 
         private static string Validate(TimelineProjectData data, string expectedLevelId)
         {
-            if (data == null) return "Save data is empty.";
-            if (data.SchemaVersion != SchemaVersion) return "Unsupported save version.";
-            if (!string.Equals(data.LevelId, expectedLevelId, StringComparison.Ordinal)) return "This save belongs to another level.";
-            if (!IsValidName(data.ProjectName) || string.IsNullOrEmpty(data.ProjectId)) return "Save identity is invalid.";
-            if (!Finite(data.FlightDuration) || data.FlightDuration < .1f) return "Flight time is invalid.";
-            if (!Enum.IsDefined(typeof(CinematicPlaybackMode), data.PlaybackMode)) return "Playback mode is invalid.";
+            if (data == null) return UiText.T("Save data is empty.", "Файл сохранения пуст.");
+            if (data.SchemaVersion != SchemaVersion) return UiText.T("Unsupported save version.", "Версия сохранения не поддерживается.");
+            if (!string.Equals(data.LevelId, expectedLevelId, StringComparison.Ordinal)) return UiText.T("This save belongs to another level.", "Это сохранение принадлежит другому уровню.");
+            if (!IsValidName(data.ProjectName) || string.IsNullOrEmpty(data.ProjectId)) return UiText.T("Save identity is invalid.", "Некорректные данные сохранения.");
+            if (!Finite(data.FlightDuration) || data.FlightDuration < .1f) return UiText.T("Flight time is invalid.", "Некорректное время пролёта.");
+            if (!Enum.IsDefined(typeof(CinematicPlaybackMode), data.PlaybackMode)) return UiText.T("Playback mode is invalid.", "Некорректный режим пролёта.");
             if (!Finite(data.SoftPointIncomingPercent) || data.SoftPointIncomingPercent < 1f || data.SoftPointIncomingPercent > 45f ||
-                !Finite(data.SoftPointOutgoingPercent) || data.SoftPointOutgoingPercent < 1f || data.SoftPointOutgoingPercent > 45f) return "Soft Point settings are invalid.";
-            if (data.Points == null || data.Points.Length > 10000) return "Camera Points are invalid.";
-            if (data.Segments == null || data.Segments.Length != Math.Max(0, data.Points.Length - 1)) return "Segments are invalid.";
+                !Finite(data.SoftPointOutgoingPercent) || data.SoftPointOutgoingPercent < 1f || data.SoftPointOutgoingPercent > 45f) return UiText.T("Soft Point settings are invalid.", "Некорректные параметры мягких точек.");
+            if (data.Points == null || data.Points.Length > 10000) return UiText.T("Camera Points are invalid.", "Некорректные точки камеры.");
+            if (data.Segments == null || data.Segments.Length != Math.Max(0, data.Points.Length - 1)) return UiText.T("Segments are invalid.", "Некорректные сегменты.");
             for (int i = 0; i < data.Points.Length; i++)
             {
                 TimelinePointData point = data.Points[i];
                 if (point == null || !Finite(point.PositionX) || !Finite(point.PositionY) || !Finite(point.PositionZ) ||
                     !Finite(point.RotationX) || !Finite(point.RotationY) || !Finite(point.RotationZ) || !Finite(point.RotationW) ||
-                    !Finite(point.FieldOfView) || point.FieldOfView < 1f || point.FieldOfView > 179f) return "Camera Point " + (i + 1) + " is invalid.";
+                    !Finite(point.FieldOfView) || point.FieldOfView < 1f || point.FieldOfView > 179f) return UiText.F("Camera Point {0} is invalid.", "Точка камеры {0} некорректна.", i + 1);
             }
             for (int i = 0; i < data.Segments.Length; i++)
             {
                 TimelineSegmentData segment = data.Segments[i];
                 if (segment == null || !Enum.IsDefined(typeof(PathType), segment.PathType) || !Enum.IsDefined(typeof(EasingType), segment.EasingType))
-                    return "Segment " + (i + 1) + " is invalid.";
+                    return UiText.F("Segment {0} is invalid.", "Сегмент {0} некорректен.", i + 1);
             }
             return "";
         }
@@ -271,7 +286,7 @@ namespace UltraCinematic.Persistence
 
         private static string ValidateProjectName(string value)
         {
-            if (!IsValidName(value)) return "Name must contain 1–64 visible characters.";
+            if (!IsValidName(value)) return UiText.T("Name must contain 1–64 visible characters.", "Имя должно содержать от 1 до 64 видимых символов.");
             return "";
         }
 

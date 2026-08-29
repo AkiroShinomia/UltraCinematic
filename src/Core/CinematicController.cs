@@ -27,6 +27,7 @@ namespace UltraCinematic.Core
         private bool frozenPlayback;
         private float timeScaleBeforeFrozenPlayback = 1f;
         private bool restorePhotoPauseAfterPlayback;
+        private bool restorePhotoPauseAfterTimeline;
         private bool initialized;
 
         public bool EditModeEnabled { get; private set; }
@@ -64,6 +65,7 @@ namespace UltraCinematic.Core
         public void DisableEditMode()
         {
             if (!EditModeEnabled) return;
+            restorePhotoPauseAfterTimeline = false;
             if (PlaybackActive)
             {
                 restorePhotoPauseAfterPlayback = false;
@@ -79,8 +81,15 @@ namespace UltraCinematic.Core
 
         public void AddCameraPoint()
         {
-            if (!EditModeEnabled || PlaybackActive || !ResolveCamera()) return;
-            Timeline.Add(new CameraPoint { Position = camera.transform.position, Rotation = camera.transform.rotation, FieldOfView = camera.fieldOfView });
+            if (!EditModeEnabled || PlaybackActive) return;
+            CameraState pointState;
+            if (PhotoPauseActive) pointState = photoPause.CameraState;
+            else
+            {
+                if (!ResolveCamera()) return;
+                pointState = new CameraState(camera.transform.position, camera.transform.rotation, camera.fieldOfView);
+            }
+            Timeline.Add(new CameraPoint { Position = pointState.Position, Rotation = pointState.Rotation, FieldOfView = pointState.FieldOfView });
             Timeline.CursorTime = Timeline.Duration;
             visualizer.Rebuild();
             menuCoordinator.RequestRefresh();
@@ -100,9 +109,17 @@ namespace UltraCinematic.Core
         public void ToggleTimeline()
         {
             if (!EditModeEnabled || PlaybackActive) return;
-            DisablePhotoPause();
-            if (timelineUi.IsOpen) CloseTimeline();
-            else OpenTimeline();
+            if (timelineUi.IsOpen)
+            {
+                CloseTimeline();
+                RestorePhotoPauseAfterTimelineIfNeeded();
+            }
+            else
+            {
+                restorePhotoPauseAfterTimeline = PhotoPauseActive;
+                DisablePhotoPause();
+                OpenTimeline();
+            }
         }
 
         public void EnablePhotoPause()
@@ -132,7 +149,8 @@ namespace UltraCinematic.Core
         {
             if (!EditModeEnabled || PlaybackActive) return;
             if (Timeline.Keyframes.Count < 2) { log.LogWarning("Playback requires at least two Camera Points."); return; }
-            restorePhotoPauseAfterPlayback = PhotoPauseActive;
+            restorePhotoPauseAfterPlayback = PhotoPauseActive || restorePhotoPauseAfterTimeline;
+            restorePhotoPauseAfterTimeline = false;
             DisablePhotoPause();
             CloseTimeline();
             if (!ResolveCamera() || !playerPlayback.Begin(camera, restorePhotoPauseAfterPlayback))
@@ -188,6 +206,15 @@ namespace UltraCinematic.Core
             if (PhotoPauseActive) log.LogInfo("Restored Pause Game state after Cinematic Playback.");
         }
 
+        private void RestorePhotoPauseAfterTimelineIfNeeded()
+        {
+            if (!restorePhotoPauseAfterTimeline) return;
+            restorePhotoPauseAfterTimeline = false;
+            if (!EditModeEnabled || PlaybackActive) return;
+            EnablePhotoPause();
+            if (PhotoPauseActive) log.LogInfo("Restored Pause Game state after closing Timeline.");
+        }
+
         internal bool BeginTimelinePreview()
         {
             if (!timelineSessionActive || !EditModeEnabled || PlaybackActive || Timeline.Keyframes.Count == 0) return false;
@@ -234,6 +261,11 @@ namespace UltraCinematic.Core
             menuCoordinator.RequestRefresh();
         }
 
+        internal void NotifyInterfaceSettingsChanged()
+        {
+            menuCoordinator.RequestRefresh();
+        }
+
         private void Update()
         {
             if (PhotoPauseActive)
@@ -261,6 +293,7 @@ namespace UltraCinematic.Core
 
         public void ClearForSceneChange()
         {
+            restorePhotoPauseAfterTimeline = false;
             if (PlaybackActive) StopPlayback();
             DisablePhotoPause();
             CloseTimeline();
@@ -325,6 +358,7 @@ namespace UltraCinematic.Core
 
         private void OnDestroy()
         {
+            restorePhotoPauseAfterTimeline = false;
             if (PlaybackActive) StopPlayback();
             DisablePhotoPause();
             CloseTimeline();

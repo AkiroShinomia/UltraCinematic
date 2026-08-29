@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using UltraCinematic.Configuration;
 using UltraCinematic.Core;
 using UltraCinematic.Data;
 using UltraCinematic.Persistence;
@@ -11,11 +12,12 @@ namespace UltraCinematic.UI
 {
     internal sealed class TimelineUiController : MonoBehaviour
     {
-        private enum DialogMode { None, Save, Load, ConfirmClear, ConfirmDelete, ConfirmOverwrite }
+        private enum DialogMode { None, Save, Load, Settings, ConfirmClear, ConfirmDelete, ConfirmOverwrite }
 
         private CinematicController controller;
+        private UltraCinematicPreferences preferences;
         private Rect window = new Rect(30, 30, 900, 740);
-        private readonly TimelineSaveRepository saveRepository = new TimelineSaveRepository();
+        private TimelineSaveRepository saveRepository;
         private List<TimelineSaveEntry> savedProjects = new List<TimelineSaveEntry>();
         private TimelineSaveEntry pendingSave;
         private DialogMode dialogMode;
@@ -23,9 +25,15 @@ namespace UltraCinematic.UI
         private string saveNameInput = "";
         private string dialogError = "";
         private string statusMessage = "";
+        private string saveDirectoryInput = "";
+        private string settingsMessage = "";
+        private string settingsError = "";
         private Texture2D pointMarkerTexture;
         private Texture2D pointMarkerHoverTexture;
         private GUIStyle pointMarkerLabelStyle;
+        private GUISkin darkSkin;
+        private GUISkin darkSkinSource;
+        private readonly List<Texture2D> themeTextures = new List<Texture2D>();
         private int selectedSegment;
         private int selectedPoint = -1;
         private bool dragCursor;
@@ -43,7 +51,14 @@ namespace UltraCinematic.UI
         public bool IsOpen { get; private set; }
         public bool IsDragging => dragCursor || scrubField >= 0;
 
-        public void Initialize(CinematicController value) { controller = value; }
+        public void Initialize(CinematicController value)
+        {
+            controller = value;
+            preferences = UltraCinematicPlugin.Preferences;
+            string directory = preferences == null ? UltraCinematicPreferences.DefaultTimelineDirectory : preferences.TimelineDirectory;
+            saveRepository = new TimelineSaveRepository(directory);
+            saveDirectoryInput = directory;
+        }
         public void Open() { IsOpen = true; SyncFlightTimeInput(); SyncSoftPointInputs(); SyncPointInputs(); }
         public void Close()
         {
@@ -61,6 +76,9 @@ namespace UltraCinematic.UI
         {
             if (pointMarkerTexture != null) Destroy(pointMarkerTexture);
             if (pointMarkerHoverTexture != null) Destroy(pointMarkerHoverTexture);
+            if (darkSkin != null) Destroy(darkSkin);
+            for (int i = 0; i < themeTextures.Count; i++) if (themeTextures[i] != null) Destroy(themeTextures[i]);
+            themeTextures.Clear();
         }
 
         private void Update()
@@ -86,7 +104,13 @@ namespace UltraCinematic.UI
         private void OnGUI()
         {
             if (!IsOpen || !controller.EditModeEnabled || controller.PlaybackActive) return;
-            window = GUI.Window(GetInstanceID(), window, Draw, "Cinematic Timeline");
+            GUISkin previousSkin = GUI.skin;
+            try
+            {
+                if (preferences != null && preferences.Style == InterfaceStyle.Dark) GUI.skin = GetDarkSkin(previousSkin);
+                window = GUI.Window(GetInstanceID(), window, Draw, UiText.T("Cinematic Timeline", "Кинематографический таймлайн"));
+            }
+            finally { GUI.skin = previousSkin; }
         }
 
         private void Draw(int id)
@@ -94,15 +118,16 @@ namespace UltraCinematic.UI
             CinematicTimeline timeline = controller.Timeline;
             if (dialogMode == DialogMode.None)
             {
-                if (GUI.Button(new Rect(8f, 2f, 68f, 20f), "SAVE")) OpenSaveDialog();
-                if (GUI.Button(new Rect(80f, 2f, 68f, 20f), "LOAD")) OpenLoadDialog();
-                if (GUI.Button(new Rect(window.width - 148f, 2f, 68f, 20f), "CLEAR")) { dialogError = ""; dialogMode = DialogMode.ConfirmClear; }
+                if (GUI.Button(new Rect(8f, 2f, 68f, 20f), UiText.T("SAVE", "СОХР."))) OpenSaveDialog();
+                if (GUI.Button(new Rect(80f, 2f, 68f, 20f), UiText.T("LOAD", "ЗАГР."))) OpenLoadDialog();
+                if (GUI.Button(new Rect(window.width - 246f, 2f, 68f, 20f), UiText.T("CLEAR", "ОЧИСТ."))) { dialogError = ""; dialogMode = DialogMode.ConfirmClear; }
+                if (GUI.Button(new Rect(window.width - 174f, 2f, 132f, 20f), UiText.T("SETTINGS", "НАСТРОЙКИ"))) OpenSettingsDialog();
             }
-            if (GUI.Button(new Rect(window.width - 76f, 2f, 68f, 20f), "CLOSE")) { controller.ToggleTimeline(); return; }
+            if (GUI.Button(new Rect(window.width - 38f, 2f, 30f, 20f), "X")) { controller.ToggleTimeline(); return; }
             if (dialogMode != DialogMode.None)
             {
                 DrawDialog(timeline);
-                GUI.DragWindow(new Rect(152f, 0f, window.width - 304f, 24f));
+                GUI.DragWindow(new Rect(152f, 0f, window.width - 410f, 24f));
                 return;
             }
             if (!string.IsNullOrEmpty(statusMessage)) GUI.Label(new Rect(156f, 27f, window.width - 312f, 22f), statusMessage);
@@ -122,7 +147,7 @@ namespace UltraCinematic.UI
                 bool markerHovered = offset.sqrMagnitude <= 27f * 27f;
                 if (markerHovered) mouseOverMarker = true;
                 GUI.DrawTexture(marker, markerHovered ? pointMarkerHoverTexture : pointMarkerTexture, ScaleMode.StretchToFill, true);
-                GUI.Label(marker, (i + 1) + "\n" + timeline.Keyframes[i].Time.ToString("0.00") + "s", pointMarkerLabelStyle);
+                GUI.Label(marker, (i + 1) + "\n" + timeline.Keyframes[i].Time.ToString("0.00") + UiText.T("s", "с"), pointMarkerLabelStyle);
                 if (markerHovered && e.type == EventType.MouseDown && e.button == 0)
                 {
                     SelectPoint(i);
@@ -134,7 +159,7 @@ namespace UltraCinematic.UI
             {
                 float fromX = track.x + timeline.Keyframes[i].Time / duration * track.width;
                 float toX = track.x + timeline.Keyframes[i + 1].Time / duration * track.width;
-                GUI.Label(new Rect((fromX + toX) * .5f - 34f, track.y + 15f, 68f, 22f), SegmentLabel(i) + ": " + timeline.GetSegmentDuration(i).ToString("0.00") + "s");
+                GUI.Label(new Rect((fromX + toX) * .5f - 34f, track.y + 15f, 68f, 22f), SegmentLabel(i) + ": " + timeline.GetSegmentDuration(i).ToString("0.00") + UiText.T("s", "с"));
             }
 
             float cursorX = track.x + timeline.CursorTime / duration * track.width;
@@ -157,10 +182,10 @@ namespace UltraCinematic.UI
             DrawCinematicSettings(timeline);
             if (timeline.SegmentCount > 0)
             {
-                if (GUILayout.Button("START CINEMATIC", GUILayout.Height(30))) controller.StartPlayback();
+                if (GUILayout.Button(UiText.T("START CINEMATIC", "ЗАПУСТИТЬ СИНЕМАТИК"), GUILayout.Height(30))) controller.StartPlayback();
             }
-            else GUILayout.Label("Add at least two Camera Points to create and play a timeline.");
-            GUI.DragWindow(new Rect(152f, 0f, window.width - 304f, 24f));
+            else GUILayout.Label(UiText.T("Add at least two Camera Points to create and play a timeline.", "Добавьте минимум две точки камеры, чтобы создать и запустить таймлайн."));
+            GUI.DragWindow(new Rect(152f, 0f, window.width - 410f, 24f));
         }
 
         private void DrawDialog(CinematicTimeline timeline)
@@ -168,36 +193,37 @@ namespace UltraCinematic.UI
             GUILayout.Space(30f);
             if (dialogMode == DialogMode.Save) DrawSaveDialog(timeline);
             else if (dialogMode == DialogMode.Load) DrawLoadDialog(timeline);
+            else if (dialogMode == DialogMode.Settings) DrawSettingsDialog();
             else if (dialogMode == DialogMode.ConfirmClear)
-                DrawConfirmation("CLEAR CURRENT PROJECT", "Delete every Camera Point and restore all Timeline settings to defaults?", "CLEAR EVERYTHING", DialogMode.None, ClearCurrentProject);
+                DrawConfirmation(UiText.T("CLEAR CURRENT PROJECT", "ОЧИСТИТЬ ТЕКУЩИЙ ПРОЕКТ"), UiText.T("Delete every Camera Point and restore all Timeline settings to defaults?", "Удалить все точки камеры и восстановить стандартные настройки таймлайна?"), UiText.T("CLEAR EVERYTHING", "УДАЛИТЬ ВСЁ"), DialogMode.None, ClearCurrentProject);
             else if (dialogMode == DialogMode.ConfirmDelete)
-                DrawConfirmation("DELETE SAVE", "Permanently delete \"" + SafePendingName() + "\"?", "DELETE", DialogMode.Load, DeletePendingSave);
+                DrawConfirmation(UiText.T("DELETE SAVE", "УДАЛИТЬ СОХРАНЕНИЕ"), UiText.F("Permanently delete \"{0}\"?", "Навсегда удалить \"{0}\"?", SafePendingName()), UiText.T("DELETE", "УДАЛИТЬ"), DialogMode.Load, DeletePendingSave);
             else if (dialogMode == DialogMode.ConfirmOverwrite)
-                DrawConfirmation("OVERWRITE SAVE", "Replace \"" + SafePendingName() + "\" with the current Timeline?", "OVERWRITE", DialogMode.Load, () => OverwritePendingSave(timeline));
+                DrawConfirmation(UiText.T("OVERWRITE SAVE", "ПЕРЕЗАПИСАТЬ СОХРАНЕНИЕ"), UiText.F("Replace \"{0}\" with the current Timeline?", "Заменить \"{0}\" текущим таймлайном?", SafePendingName()), UiText.T("OVERWRITE", "ПЕРЕЗАПИСАТЬ"), DialogMode.Load, () => OverwritePendingSave(timeline));
         }
 
         private void DrawSaveDialog(CinematicTimeline timeline)
         {
             GUILayout.BeginVertical("box");
-            GUILayout.Label("SAVE TIMELINE PROJECT");
-            GUILayout.Label("Level: " + saveRepository.CurrentLevelName);
-            GUILayout.Label("This project can only be loaded on this level.");
+            GUILayout.Label(UiText.T("SAVE TIMELINE PROJECT", "СОХРАНЕНИЕ ПРОЕКТА ТАЙМЛАЙНА"));
+            GUILayout.Label(UiText.T("Level: ", "Уровень: ") + saveRepository.CurrentLevelName);
+            GUILayout.Label(UiText.T("This project can only be loaded on this level.", "Этот проект можно загрузить только на данном уровне."));
             GUILayout.Space(12f);
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Project name", GUILayout.Width(100f));
+            GUILayout.Label(UiText.T("Project name", "Название проекта"), GUILayout.Width(130f));
             GUI.SetNextControlName("timeline-save-name");
             saveNameInput = GUILayout.TextField(saveNameInput ?? "", 64);
             GUILayout.EndHorizontal();
             DrawDialogError();
             GUILayout.FlexibleSpace();
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("CANCEL", GUILayout.Height(30f))) { dialogMode = DialogMode.None; dialogError = ""; }
-            if (GUILayout.Button("SAVE", GUILayout.Height(30f)))
+            if (GUILayout.Button(UiText.T("CANCEL", "ОТМЕНА"), GUILayout.Height(30f))) { dialogMode = DialogMode.None; dialogError = ""; }
+            if (GUILayout.Button(UiText.T("SAVE", "СОХРАНИТЬ"), GUILayout.Height(30f)))
             {
                 string error;
                 if (saveRepository.Create(saveNameInput, timeline, out error))
                 {
-                    statusMessage = "Saved project: " + saveNameInput.Trim();
+                    statusMessage = UiText.T("Saved project: ", "Проект сохранён: ") + saveNameInput.Trim();
                     dialogMode = DialogMode.None;
                     dialogError = "";
                 }
@@ -210,11 +236,11 @@ namespace UltraCinematic.UI
         private void DrawLoadDialog(CinematicTimeline timeline)
         {
             GUILayout.BeginVertical("box");
-            GUILayout.Label("LOAD TIMELINE PROJECT — " + saveRepository.CurrentLevelName);
-            GUILayout.Label("Only projects saved on this exact level are shown.");
+            GUILayout.Label(UiText.T("LOAD TIMELINE PROJECT — ", "ЗАГРУЗКА ПРОЕКТА ТАЙМЛАЙНА — ") + saveRepository.CurrentLevelName);
+            GUILayout.Label(UiText.T("Only projects saved on this exact level are shown.", "Показаны только проекты, сохранённые на этом уровне."));
             DrawDialogError();
             saveListScroll = GUILayout.BeginScrollView(saveListScroll, GUILayout.Height(window.height - 145f));
-            if (savedProjects.Count == 0) GUILayout.Label("No saved Timeline projects on this level.");
+            if (savedProjects.Count == 0) GUILayout.Label(UiText.T("No saved Timeline projects on this level.", "На этом уровне пока нет сохранённых проектов таймлайна."));
 
             TimelineSaveEntry loadEntry = null, overwriteEntry = null, deleteEntry = null;
             for (int i = 0; i < savedProjects.Count; i++)
@@ -223,21 +249,117 @@ namespace UltraCinematic.UI
                 GUILayout.BeginHorizontal("box");
                 GUILayout.BeginVertical();
                 GUILayout.Label(entry.Data.ProjectName);
-                GUILayout.Label(entry.Data.Points.Length + " points  •  " + entry.Data.FlightDuration.ToString("0.00") + "s  •  " + FormatModifiedTime(entry.Data.ModifiedUtcTicks));
-                if (!string.IsNullOrEmpty(entry.Warning)) GUILayout.Label("WARNING: " + entry.Warning);
+                GUILayout.Label(entry.Data.Points.Length + UiText.T(" points  •  ", " точек  •  ") + entry.Data.FlightDuration.ToString("0.00") + UiText.T("s  •  ", "с  •  ") + FormatModifiedTime(entry.Data.ModifiedUtcTicks));
+                if (!string.IsNullOrEmpty(entry.Warning)) GUILayout.Label(UiText.T("WARNING: ", "ПРЕДУПРЕЖДЕНИЕ: ") + entry.Warning);
                 GUILayout.EndVertical();
-                if (GUILayout.Button("LOAD", GUILayout.Width(70f), GUILayout.Height(42f))) loadEntry = entry;
-                if (GUILayout.Button("OVERWRITE", GUILayout.Width(96f), GUILayout.Height(42f))) overwriteEntry = entry;
-                if (GUILayout.Button("DELETE", GUILayout.Width(70f), GUILayout.Height(42f))) deleteEntry = entry;
+                if (GUILayout.Button(UiText.T("LOAD", "ЗАГРУЗИТЬ"), GUILayout.Width(90f), GUILayout.Height(42f))) loadEntry = entry;
+                if (GUILayout.Button(UiText.T("OVERWRITE", "ПЕРЕЗАПИСАТЬ"), GUILayout.Width(130f), GUILayout.Height(42f))) overwriteEntry = entry;
+                if (GUILayout.Button(UiText.T("DELETE", "УДАЛИТЬ"), GUILayout.Width(90f), GUILayout.Height(42f))) deleteEntry = entry;
                 GUILayout.EndHorizontal();
             }
             GUILayout.EndScrollView();
-            if (GUILayout.Button("BACK", GUILayout.Height(30f))) { dialogMode = DialogMode.None; dialogError = ""; }
+            if (GUILayout.Button(UiText.T("BACK", "НАЗАД"), GUILayout.Height(30f))) { dialogMode = DialogMode.None; dialogError = ""; }
             GUILayout.EndVertical();
 
             if (loadEntry != null) LoadProject(loadEntry, timeline);
             else if (overwriteEntry != null) { pendingSave = overwriteEntry; dialogError = ""; dialogMode = DialogMode.ConfirmOverwrite; }
             else if (deleteEntry != null) { pendingSave = deleteEntry; dialogError = ""; dialogMode = DialogMode.ConfirmDelete; }
+        }
+
+        private void DrawSettingsDialog()
+        {
+            GUILayout.BeginVertical("box");
+            GUILayout.Label(UiText.T("ULTRACINEMATIC SETTINGS", "НАСТРОЙКИ ULTRACINEMATIC"));
+            GUILayout.Space(10f);
+
+            GUILayout.Label(UiText.T("Language", "Язык"));
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Toggle(preferences.Language == InterfaceLanguage.English, "ENGLISH", "Button", GUILayout.Height(32f)) && preferences.Language != InterfaceLanguage.English)
+            {
+                preferences.Language = InterfaceLanguage.English;
+                settingsMessage = UiText.T("Language changed to English.", "Язык изменён на английский.");
+                settingsError = "";
+                controller.NotifyInterfaceSettingsChanged();
+            }
+            if (GUILayout.Toggle(preferences.Language == InterfaceLanguage.Russian, "РУССКИЙ", "Button", GUILayout.Height(32f)) && preferences.Language != InterfaceLanguage.Russian)
+            {
+                preferences.Language = InterfaceLanguage.Russian;
+                settingsMessage = UiText.T("Language changed to Russian.", "Язык изменён на русский.");
+                settingsError = "";
+                controller.NotifyInterfaceSettingsChanged();
+            }
+            GUILayout.EndHorizontal();
+
+            GUILayout.Space(14f);
+            GUILayout.Label(UiText.T("UI style", "Стиль интерфейса"));
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Toggle(preferences.Style == InterfaceStyle.Classic, UiText.T("CLASSIC", "КЛАССИЧЕСКИЙ"), "Button", GUILayout.Height(32f)) && preferences.Style != InterfaceStyle.Classic)
+            {
+                preferences.Style = InterfaceStyle.Classic;
+                settingsMessage = UiText.T("Classic UI style selected.", "Выбран классический стиль интерфейса.");
+                settingsError = "";
+            }
+            if (GUILayout.Toggle(preferences.Style == InterfaceStyle.Dark, UiText.T("DARK", "ТЁМНЫЙ"), "Button", GUILayout.Height(32f)) && preferences.Style != InterfaceStyle.Dark)
+            {
+                preferences.Style = InterfaceStyle.Dark;
+                settingsMessage = UiText.T("Dark UI style selected.", "Выбран тёмный стиль интерфейса.");
+                settingsError = "";
+            }
+            GUILayout.EndHorizontal();
+
+            GUILayout.Space(14f);
+            GUILayout.Label(UiText.T("Timeline saves folder", "Папка сохранений таймлайна"));
+            GUILayout.Label(UiText.T("Current folder:", "Текущая папка:"));
+            GUILayout.TextArea(saveRepository.RootDirectory, GUILayout.Height(44f));
+            GUILayout.Label(UiText.T("New absolute folder path:", "Новый полный путь к папке:"));
+            saveDirectoryInput = GUILayout.TextField(saveDirectoryInput ?? "");
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button(UiText.T("APPLY FOLDER", "ПРИМЕНИТЬ ПАПКУ"), GUILayout.Height(32f))) ApplySaveDirectory();
+            if (GUILayout.Button(UiText.T("USE DEFAULT", "ВЕРНУТЬ СТАНДАРТНУЮ"), GUILayout.Height(32f))) ResetSaveDirectory();
+            GUILayout.EndHorizontal();
+            GUILayout.Label(UiText.T("Changing the folder does not move existing project files.", "При смене папки существующие файлы проектов не перемещаются."));
+
+            if (!string.IsNullOrEmpty(settingsError)) GUILayout.Label(UiText.T("ERROR: ", "ОШИБКА: ") + settingsError);
+            else if (!string.IsNullOrEmpty(settingsMessage)) GUILayout.Label(settingsMessage);
+
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button(UiText.T("BACK", "НАЗАД"), GUILayout.Height(34f)))
+            {
+                settingsMessage = "";
+                settingsError = "";
+                dialogMode = DialogMode.None;
+            }
+            GUILayout.EndVertical();
+        }
+
+        private void ApplySaveDirectory()
+        {
+            string error;
+            if (!preferences.TrySetTimelineDirectory(saveDirectoryInput, out error))
+            {
+                settingsError = error;
+                settingsMessage = "";
+                return;
+            }
+            saveDirectoryInput = preferences.TimelineDirectory;
+            saveRepository.SetRootDirectory(preferences.TimelineDirectory);
+            settingsError = "";
+            settingsMessage = UiText.T("Timeline save folder updated.", "Папка сохранений таймлайна обновлена.");
+        }
+
+        private void ResetSaveDirectory()
+        {
+            string error;
+            if (!preferences.TryResetTimelineDirectory(out error))
+            {
+                settingsError = error;
+                settingsMessage = "";
+                return;
+            }
+            saveDirectoryInput = preferences.TimelineDirectory;
+            saveRepository.SetRootDirectory(preferences.TimelineDirectory);
+            settingsError = "";
+            settingsMessage = UiText.T("Default Timeline save folder restored.", "Стандартная папка сохранений таймлайна восстановлена.");
         }
 
         private void DrawConfirmation(string title, string message, string confirmLabel, DialogMode cancelMode, Action confirmAction)
@@ -249,7 +371,7 @@ namespace UltraCinematic.UI
             DrawDialogError();
             GUILayout.FlexibleSpace();
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("CANCEL", GUILayout.Height(34f))) { dialogMode = cancelMode; pendingSave = null; dialogError = ""; }
+            if (GUILayout.Button(UiText.T("CANCEL", "ОТМЕНА"), GUILayout.Height(34f))) { dialogMode = cancelMode; pendingSave = null; dialogError = ""; }
             if (GUILayout.Button(confirmLabel, GUILayout.Height(34f))) confirmAction();
             GUILayout.EndHorizontal();
             GUILayout.EndVertical();
@@ -270,6 +392,15 @@ namespace UltraCinematic.UI
             dialogMode = DialogMode.Load;
         }
 
+        private void OpenSettingsDialog()
+        {
+            EndPointPreview();
+            saveDirectoryInput = preferences.TimelineDirectory;
+            settingsMessage = "";
+            settingsError = "";
+            dialogMode = DialogMode.Settings;
+        }
+
         private void RefreshSavedProjects()
         {
             string error;
@@ -285,7 +416,7 @@ namespace UltraCinematic.UI
             if (!saveRepository.Apply(entry, timeline, out error)) { dialogError = error; return; }
             ResetEditorSelection();
             controller.NotifyTimelineProjectChanged();
-            statusMessage = "Loaded project: " + entry.Data.ProjectName;
+            statusMessage = UiText.T("Loaded project: ", "Проект загружен: ") + entry.Data.ProjectName;
             dialogMode = DialogMode.None;
         }
 
@@ -293,7 +424,7 @@ namespace UltraCinematic.UI
         {
             string error;
             if (!saveRepository.Overwrite(pendingSave, timeline, out error)) { dialogError = error; return; }
-            statusMessage = "Overwritten project: " + SafePendingName();
+            statusMessage = UiText.T("Overwritten project: ", "Проект перезаписан: ") + SafePendingName();
             pendingSave = null;
             RefreshSavedProjects();
             dialogMode = DialogMode.Load;
@@ -304,7 +435,7 @@ namespace UltraCinematic.UI
             string deletedName = SafePendingName();
             string error;
             if (!saveRepository.Delete(pendingSave, out error)) { dialogError = error; return; }
-            statusMessage = "Deleted project: " + deletedName;
+            statusMessage = UiText.T("Deleted project: ", "Проект удалён: ") + deletedName;
             pendingSave = null;
             RefreshSavedProjects();
             dialogMode = DialogMode.Load;
@@ -316,7 +447,7 @@ namespace UltraCinematic.UI
             controller.Timeline.Clear();
             ResetEditorSelection();
             controller.NotifyTimelineProjectChanged();
-            statusMessage = "Current Timeline project cleared.";
+            statusMessage = UiText.T("Current Timeline project cleared.", "Текущий проект таймлайна очищен.");
             dialogError = "";
             dialogMode = DialogMode.None;
         }
@@ -335,15 +466,15 @@ namespace UltraCinematic.UI
 
         private void DrawDialogError()
         {
-            if (!string.IsNullOrEmpty(dialogError)) GUILayout.Label("ERROR: " + dialogError);
+            if (!string.IsNullOrEmpty(dialogError)) GUILayout.Label(UiText.T("ERROR: ", "ОШИБКА: ") + dialogError);
         }
 
-        private string SafePendingName() => pendingSave == null || pendingSave.Data == null ? "unknown" : pendingSave.Data.ProjectName;
+        private string SafePendingName() => pendingSave == null || pendingSave.Data == null ? UiText.T("unknown", "неизвестно") : pendingSave.Data.ProjectName;
 
         private static string FormatModifiedTime(long ticks)
         {
             try { return new DateTime(ticks, DateTimeKind.Utc).ToLocalTime().ToString("yyyy-MM-dd HH:mm"); }
-            catch { return "unknown time"; }
+            catch { return UiText.T("unknown time", "неизвестное время"); }
         }
 
         private void EnsurePointMarkerResources()
@@ -377,58 +508,58 @@ namespace UltraCinematic.UI
         private void DrawSegmentSettings(CinematicTimeline timeline)
         {
             GUILayout.BeginVertical("box");
-            GUILayout.Label("SEGMENT SETTINGS");
+            GUILayout.Label(UiText.T("SEGMENT SETTINGS", "НАСТРОЙКИ СЕГМЕНТА"));
             if (timeline.SegmentCount > 0)
             {
                 selectedSegment = Mathf.Clamp(selectedSegment, 0, timeline.SegmentCount - 1);
-                GUILayout.BeginHorizontal(); GUILayout.Label("Segments", GUILayout.Width(70));
+                GUILayout.BeginHorizontal(); GUILayout.Label(UiText.T("Segments", "Сегменты"), GUILayout.Width(80));
                 for (int i = 0; i < timeline.SegmentCount; i++)
                     if (GUILayout.Toggle(selectedSegment == i, SegmentLabel(i), "Button", GUILayout.Width(42)) && selectedSegment != i) selectedSegment = i;
                 GUILayout.EndHorizontal();
-                GUILayout.Label("Segment " + SegmentLabel(selectedSegment) + ": Point " + (selectedSegment + 1) + " → Point " + (selectedSegment + 2));
-                GUILayout.BeginHorizontal(); GUILayout.Label("Path", GUILayout.Width(70));
+                GUILayout.Label(UiText.F("Segment {0}: Point {1} → Point {2}", "Сегмент {0}: точка {1} → точка {2}", SegmentLabel(selectedSegment), selectedSegment + 1, selectedSegment + 2));
+                GUILayout.BeginHorizontal(); GUILayout.Label(UiText.T("Path", "Траектория"), GUILayout.Width(90));
                 foreach (PathType path in System.Enum.GetValues(typeof(PathType)))
-                    if (GUILayout.Toggle(timeline.GetPath(selectedSegment) == path, path.ToString(), "Button") && timeline.GetPath(selectedSegment) != path) { timeline.SetPath(selectedSegment, path); controller.RefreshVisualization(); }
+                    if (GUILayout.Toggle(timeline.GetPath(selectedSegment) == path, PathLabel(path), "Button") && timeline.GetPath(selectedSegment) != path) { timeline.SetPath(selectedSegment, path); controller.RefreshVisualization(); }
                 GUILayout.EndHorizontal();
-                GUILayout.BeginHorizontal(); GUILayout.Label("Easing", GUILayout.Width(70));
+                GUILayout.BeginHorizontal(); GUILayout.Label(UiText.T("Easing", "Сглаживание"), GUILayout.Width(90));
                 foreach (EasingType easing in System.Enum.GetValues(typeof(EasingType)))
-                    if (GUILayout.Toggle(timeline.GetEasing(selectedSegment) == easing, easing.ToString(), "Button") && timeline.GetEasing(selectedSegment) != easing) { timeline.SetEasing(selectedSegment, easing); controller.RefreshVisualization(); }
+                    if (GUILayout.Toggle(timeline.GetEasing(selectedSegment) == easing, EasingLabel(easing), "Button") && timeline.GetEasing(selectedSegment) != easing) { timeline.SetEasing(selectedSegment, easing); controller.RefreshVisualization(); }
                 GUILayout.EndHorizontal();
             }
-            else GUILayout.Label("No segments yet.");
+            else GUILayout.Label(UiText.T("No segments yet.", "Сегментов пока нет."));
             GUILayout.EndVertical();
         }
 
         private void DrawPointSettings(CinematicTimeline timeline)
         {
             GUILayout.BeginVertical("box");
-            GUILayout.Label("CAMERA POINT SETTINGS");
+            GUILayout.Label(UiText.T("CAMERA POINT SETTINGS", "НАСТРОЙКИ ТОЧКИ КАМЕРЫ"));
             if (selectedPoint < 0 || selectedPoint >= timeline.Points.Count)
             {
-                GUILayout.Label("Click a numbered Camera Point on the Timeline to edit its transform.");
+                GUILayout.Label(UiText.T("Click a numbered Camera Point on the Timeline to edit its transform.", "Нажмите на пронумерованную точку камеры на таймлайне, чтобы изменить её параметры."));
                 GUILayout.EndVertical();
                 return;
             }
 
             EnsurePointInputs();
-            GUILayout.Label("Point " + (selectedPoint + 1) + " — world position and camera rotation");
+            GUILayout.Label(UiText.F("Point {0} — world position and camera rotation", "Точка {0} — позиция в мире и поворот камеры", selectedPoint + 1));
             GUILayout.BeginHorizontal();
             GUILayout.BeginVertical();
-            GUILayout.Label("Position");
+            GUILayout.Label(UiText.T("Position", "Позиция"));
             DrawPointField("X", 0, .02f);
             DrawPointField("Y", 1, .02f);
             DrawPointField("Z", 2, .02f);
             GUILayout.EndVertical();
             GUILayout.BeginVertical();
-            GUILayout.Label("Rotation (degrees)");
-            DrawPointField("Pitch X", 3, .25f);
-            DrawPointField("Yaw Y", 4, .25f);
-            DrawPointField("Roll Z", 5, .25f);
+            GUILayout.Label(UiText.T("Rotation (degrees)", "Поворот (градусы)"));
+            DrawPointField(UiText.T("Pitch X", "Наклон X"), 3, .25f);
+            DrawPointField(UiText.T("Yaw Y", "Поворот Y"), 4, .25f);
+            DrawPointField(UiText.T("Roll Z", "Крен Z"), 5, .25f);
             DrawPointField("FOV", 6, .1f);
             GUILayout.EndVertical();
             GUILayout.EndHorizontal();
 
-            string previewLabel = pointPreviewActive ? "RETURN" : "PREVIEW POINT";
+            string previewLabel = pointPreviewActive ? UiText.T("RETURN", "ВЕРНУТЬСЯ") : UiText.T("PREVIEW POINT", "ПРЕДПРОСМОТР ТОЧКИ");
             if (GUILayout.Button(previewLabel, GUILayout.Height(26)))
             {
                 if (pointPreviewActive) EndPointPreview();
@@ -448,44 +579,46 @@ namespace UltraCinematic.UI
         private void DrawCinematicSettings(CinematicTimeline timeline)
         {
             GUILayout.BeginVertical("box");
-            GUILayout.Label("CINEMATIC SETTINGS");
+            GUILayout.Label(UiText.T("CINEMATIC SETTINGS", "НАСТРОЙКИ ПРОЛЁТА"));
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Flight time", GUILayout.Width(110));
+            GUILayout.Label(UiText.T("Flight time", "Время пролёта"), GUILayout.Width(120));
             if (GUILayout.Button("-0.10", GUILayout.Width(58))) SetFlightTime(Mathf.Max(.1f, timeline.FlightDuration - .1f));
             flightTimeInput = GUILayout.TextField(flightTimeInput, GUILayout.Width(80));
-            GUILayout.Label("seconds total", GUILayout.Width(88));
-            if (GUILayout.Button("Apply", GUILayout.Width(58))) ApplyFlightTimeInput();
+            GUILayout.Label(UiText.T("seconds total", "секунд всего"), GUILayout.Width(96));
+            if (GUILayout.Button(UiText.T("Apply", "Применить"), GUILayout.Width(78))) ApplyFlightTimeInput();
             if (GUILayout.Button("+0.10", GUILayout.Width(58))) SetFlightTime(timeline.FlightDuration + .1f);
             GUILayout.EndHorizontal();
-            GUILayout.Label("Segment timing is calculated automatically from the measured path length.");
+            GUILayout.Label(UiText.T("Segment timing is calculated automatically from the measured path length.", "Время сегментов рассчитывается автоматически по измеренной длине траектории."));
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Soft points", GUILayout.Width(110));
-            bool softPointsEnabled = GUILayout.Toggle(timeline.SoftPointsEnabled, timeline.SoftPointsEnabled ? "ENABLED" : "DISABLED", "Button", GUILayout.Width(110));
+            GUILayout.Label(UiText.T("Soft points", "Мягкие точки"), GUILayout.Width(120));
+            bool softPointsEnabled = GUILayout.Toggle(timeline.SoftPointsEnabled, timeline.SoftPointsEnabled ? UiText.T("ENABLED", "ВКЛЮЧЕНО") : UiText.T("DISABLED", "ВЫКЛЮЧЕНО"), "Button", GUILayout.Width(120));
             if (softPointsEnabled != timeline.SoftPointsEnabled)
             {
                 timeline.SetSoftPointsEnabled(softPointsEnabled);
                 controller.RefreshVisualization();
             }
-            GUILayout.Label("Rounds internal points for every Path type.");
+            GUILayout.Label(UiText.T("Rounds internal points for every Path type.", "Сглаживает внутренние точки для любого типа траектории."));
             GUILayout.EndHorizontal();
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Before point", GUILayout.Width(110));
+            GUILayout.Label(UiText.T("Before point", "До точки"), GUILayout.Width(120));
             softIncomingInput = GUILayout.TextField(softIncomingInput, GUILayout.Width(70));
             GUILayout.Label("%", GUILayout.Width(18));
-            GUILayout.Label("After point", GUILayout.Width(80));
+            GUILayout.Label(UiText.T("After point", "После точки"), GUILayout.Width(92));
             softOutgoingInput = GUILayout.TextField(softOutgoingInput, GUILayout.Width(70));
             GUILayout.Label("%", GUILayout.Width(18));
-            if (GUILayout.Button("Apply", GUILayout.Width(58))) ApplySoftPointInputs();
+            if (GUILayout.Button(UiText.T("Apply", "Применить"), GUILayout.Width(78))) ApplySoftPointInputs();
             GUILayout.EndHorizontal();
-            GUILayout.Label("Range: 1–45% on each side. First and last Camera Points always remain exact.");
+            GUILayout.Label(UiText.T("Range: 1–45% on each side. First and last Camera Points always remain exact.", "Диапазон: 1–45% с каждой стороны. Первая и последняя точки всегда остаются точными."));
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Playback world", GUILayout.Width(110));
-            if (GUILayout.Toggle(timeline.PlaybackMode == CinematicPlaybackMode.LiveWorld, "LIVE WORLD", "Button") && timeline.PlaybackMode != CinematicPlaybackMode.LiveWorld)
+            GUILayout.Label(UiText.T("Playback world", "Режим мира"), GUILayout.Width(120));
+            if (GUILayout.Toggle(timeline.PlaybackMode == CinematicPlaybackMode.LiveWorld, UiText.T("LIVE WORLD", "ЖИВОЙ МИР"), "Button") && timeline.PlaybackMode != CinematicPlaybackMode.LiveWorld)
                 timeline.PlaybackMode = CinematicPlaybackMode.LiveWorld;
-            if (GUILayout.Toggle(timeline.PlaybackMode == CinematicPlaybackMode.FrozenWorld, "FROZEN WORLD", "Button") && timeline.PlaybackMode != CinematicPlaybackMode.FrozenWorld)
+            if (GUILayout.Toggle(timeline.PlaybackMode == CinematicPlaybackMode.FrozenWorld, UiText.T("FROZEN WORLD", "ЗАМОРОЖЕННЫЙ МИР"), "Button") && timeline.PlaybackMode != CinematicPlaybackMode.FrozenWorld)
                 timeline.PlaybackMode = CinematicPlaybackMode.FrozenWorld;
             GUILayout.EndHorizontal();
-            GUILayout.Label(timeline.PlaybackMode == CinematicPlaybackMode.FrozenWorld ? "The world is paused; the cinematic advances on unscaled time." : "The world continues running during the cinematic.");
+            GUILayout.Label(timeline.PlaybackMode == CinematicPlaybackMode.FrozenWorld
+                ? UiText.T("The world is paused; the cinematic advances on unscaled time.", "Мир остановлен; пролёт воспроизводится по независимому времени.")
+                : UiText.T("The world continues running during the cinematic.", "Мир продолжает работать во время пролёта."));
             GUILayout.EndVertical();
         }
 
@@ -501,12 +634,12 @@ namespace UltraCinematic.UI
         private void DrawPointField(string label, int field, float sensitivity)
         {
             GUILayout.BeginHorizontal();
-            GUILayout.Label(label, GUILayout.Width(54));
+            GUILayout.Label(label, GUILayout.Width(76));
             GUI.SetNextControlName("point-field-" + field);
             pointInputs[field] = GUILayout.TextField(pointInputs[field] ?? "0.00", GUILayout.Width(82));
-            if (GUILayout.Button("SET", GUILayout.Width(38))) ApplyPointInput(field);
+            if (GUILayout.Button(UiText.T("SET", "ЗАД."), GUILayout.Width(44))) ApplyPointInput(field);
             Rect scrubRect = GUILayoutUtility.GetRect(68, 22, GUILayout.Width(68));
-            GUI.Box(scrubRect, "↔ DRAG");
+            GUI.Box(scrubRect, UiText.T("↔ DRAG", "↔ ТЯНУТЬ"));
             HandleScrub(scrubRect, field, sensitivity);
             if (Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Return && GUI.GetNameOfFocusedControl() == "point-field-" + field)
             {
@@ -653,6 +786,77 @@ namespace UltraCinematic.UI
 
         private static Vector3 SignedEuler(Vector3 euler) => new Vector3(NormalizeAngle(euler.x), NormalizeAngle(euler.y), NormalizeAngle(euler.z));
         private static float NormalizeAngle(float value) { while (value > 180f) value -= 360f; while (value < -180f) value += 360f; return value; }
+
+        private static string PathLabel(PathType path)
+        {
+            if (path == PathType.Linear) return UiText.T("Linear", "Линейная");
+            if (path == PathType.Bezier) return UiText.T("Bezier", "Безье");
+            return UiText.T("Smooth", "Плавная");
+        }
+
+        private static string EasingLabel(EasingType easing)
+        {
+            if (easing == EasingType.Linear) return UiText.T("Linear", "Линейное");
+            if (easing == EasingType.EaseIn) return UiText.T("Ease In", "Разгон");
+            if (easing == EasingType.EaseOut) return UiText.T("Ease Out", "Торможение");
+            return UiText.T("Ease In/Out", "Разгон и торможение");
+        }
+
+        private GUISkin GetDarkSkin(GUISkin source)
+        {
+            if (darkSkin != null && darkSkinSource == source) return darkSkin;
+            if (darkSkin != null) Destroy(darkSkin);
+            for (int i = 0; i < themeTextures.Count; i++) if (themeTextures[i] != null) Destroy(themeTextures[i]);
+            themeTextures.Clear();
+
+            darkSkinSource = source;
+            darkSkin = Instantiate(source);
+            darkSkin.name = "UltraCinematic Dark Skin";
+            Color text = new Color(.94f, .96f, 1f, 1f);
+            Color mutedText = new Color(.76f, .81f, .88f, 1f);
+            ApplyBackground(darkSkin.window.normal, new Color(.055f, .065f, .085f, .98f), text);
+            ApplyBackground(darkSkin.box.normal, new Color(.09f, .105f, .135f, .98f), text);
+            ConfigureInteractiveStyle(darkSkin.button, text);
+            ConfigureInteractiveStyle(darkSkin.toggle, text);
+            ConfigureTextStyle(darkSkin.textField, text);
+            ConfigureTextStyle(darkSkin.textArea, text);
+            darkSkin.label.normal.textColor = mutedText;
+            darkSkin.window.normal.textColor = text;
+            darkSkin.box.normal.textColor = text;
+            darkSkin.settings.selectionColor = new Color(.15f, .58f, .7f, 1f);
+            return darkSkin;
+        }
+
+        private void ConfigureInteractiveStyle(GUIStyle style, Color text)
+        {
+            ApplyBackground(style.normal, new Color(.16f, .19f, .24f, 1f), text);
+            ApplyBackground(style.hover, new Color(.24f, .3f, .39f, 1f), text);
+            ApplyBackground(style.active, new Color(.1f, .5f, .6f, 1f), Color.white);
+            ApplyBackground(style.focused, new Color(.2f, .25f, .32f, 1f), text);
+            ApplyBackground(style.onNormal, new Color(.12f, .43f, .5f, 1f), Color.white);
+            ApplyBackground(style.onHover, new Color(.16f, .53f, .62f, 1f), Color.white);
+            ApplyBackground(style.onActive, new Color(.09f, .37f, .44f, 1f), Color.white);
+            ApplyBackground(style.onFocused, new Color(.13f, .47f, .55f, 1f), Color.white);
+        }
+
+        private void ConfigureTextStyle(GUIStyle style, Color text)
+        {
+            ApplyBackground(style.normal, new Color(.035f, .043f, .058f, 1f), text);
+            ApplyBackground(style.hover, new Color(.05f, .065f, .085f, 1f), text);
+            ApplyBackground(style.active, new Color(.04f, .08f, .1f, 1f), text);
+            ApplyBackground(style.focused, new Color(.04f, .08f, .1f, 1f), text);
+        }
+
+        private void ApplyBackground(GUIStyleState state, Color background, Color text)
+        {
+            Texture2D texture = new Texture2D(1, 1, TextureFormat.ARGB32, false) { name = "UltraCinematic Theme Pixel" };
+            texture.SetPixel(0, 0, background);
+            texture.Apply(false, true);
+            themeTextures.Add(texture);
+            state.background = texture;
+            state.textColor = text;
+        }
+
         private static string SegmentLabel(int index) { index++; string result = ""; while (index > 0) { index--; result = (char)('A' + index % 26) + result; index /= 26; } return result; }
     }
 }
