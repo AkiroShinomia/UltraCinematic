@@ -1,41 +1,153 @@
 # UltraCinematic
 
-Personal BepInEx 5 mod for a deterministic cinematic flight of ULTRAKILL's existing `Player/MainCamera`.
+[Русский](#русский) · [English](#english)
 
-## Build
+## Русский
 
-Install the .NET Framework 4.7.2 developer pack and build with the ULTRAKILL directory supplied either as an environment variable or an MSBuild property:
+**UltraCinematic** — мод для ULTRAKILL на BepInEx 5, предназначенный для создания плавных кинематографических пролётов штатной камерой игрока. Все инструменты встроены в стандартное меню `MANAGE CHEATS` в категорию **CINEMATIC**.
+
+### Возможности
+
+- создание и удаление Camera Points прямо во время игры;
+- визуализация точек, направления камеры и маршрута в мире;
+- Timeline с предпросмотром любого кадра;
+- редактирование Position X/Y/Z, Rotation Pitch/Yaw/Roll и FOV каждой точки;
+- индивидуальные `Linear`, `Bezier` и `Smooth` Path для сегментов;
+- индивидуальные режимы Easing;
+- единое Flight Time для всего маршрута и автоматическое распределение времени по измеренной длине кривой;
+- Soft Points с настраиваемыми окнами до и после внутренних точек;
+- воспроизведение в работающем или полностью замороженном мире;
+- `Pause Game` с отдельным свободным перемещением камеры на остановленном времени;
+- именованные сохранения Timeline, привязанные к конкретному уровню;
+- загрузка, перезапись, удаление и безопасная очистка проектов.
+
+### Использование
+
+1. Включите игровые читы ULTRAKILL.
+2. Откройте `MANAGE CHEATS` и найдите категорию **CINEMATIC**.
+3. Включите **Cinematic Edit Mode**.
+4. Перемещайте игрока обычным способом или штатным Noclip и добавляйте **Camera Points**.
+5. Откройте **Timeline**, настройте точки, сегменты, общее время и параметры пролётки.
+6. Проверьте маршрут с помощью ползунка или `PREVIEW POINT`.
+7. Запустите **Start Cinematic**.
+
+Edit Mode не включает Noclip, не скрывает HUD и не меняет оружие — этими штатными функциями ULTRAKILL пользователь управляет самостоятельно.
+
+### Timeline и плавность
+
+Точки отображаются кружками и нумеруются с 1, а сегменты обозначаются буквами начиная с A. Время отдельных сегментов рассчитывается автоматически по фактической длине кривой, поэтому при `Easing: Linear` базовая пространственная скорость остаётся равномерной.
+
+Soft Points работают с любым сочетанием Path. Для внутренних точек можно задать процент сглаживания до и после точки в диапазоне 1–45%. Переход строится кривой пятой степени с непрерывными скоростью и ускорением. Первая и последняя точки всегда остаются точными.
+
+### Режимы времени
+
+- `LIVE WORLD` — мир продолжает работать во время пролётки.
+- `FROZEN WORLD` — мир, физика, частицы и снаряды остановлены, а пролётка идёт по unscaled time.
+- `Pause Game` — останавливает время и включает свободное управление: мышь, WASD, Space/Ctrl по вертикали и Shift для ускорения.
+
+Если пролётка была запущена из активного `Pause Game`, после её завершения или ручной остановки восстанавливаются исходные позиция, камера, FOV и замороженное состояние мира.
+
+### Сохранения
+
+Кнопки `SAVE`, `LOAD` и `CLEAR` находятся в верхней части Timeline. Проект сохраняет все точки, Position/Rotation/FOV, Path/Easing, Flight Time, режим времени и Soft Points.
+
+Сейвы хранятся в:
+
+```text
+BepInEx/config/UltraCinematic/Timelines
+```
+
+Каждый проект привязан к идентификатору активного уровня. Сейвы другого уровня не отображаются и не могут быть загружены. Перед загрузкой файл полностью проверяется, и только затем текущий Timeline заменяется.
+
+### Сборка и установка
+
+Требуются .NET Framework 4.7.2 Developer Pack, BepInEx 5 и установленный ULTRAKILL.
 
 ```powershell
 $env:ULTRAKILL_DIR = 'C:\Program Files (x86)\Steam\steamapps\common\ULTRAKILL'
 dotnet build -c Release
 ```
 
-Alternatively: `dotnet build -c Release -p:GameDir="D:\Games\ULTRAKILL"`.
+Либо передайте путь напрямую:
 
-Copy only `bin\Release\net472\UltraCinematic.dll` to `BepInEx\plugins\UltraCinematic\UltraCinematic.dll`.
+```powershell
+dotnet build -c Release -p:GameDir="D:\Games\ULTRAKILL"
+```
 
-## Use
+Скопируйте `bin/Release/net472/UltraCinematic.dll` в `ULTRAKILL/BepInEx/plugins/UltraCinematic/UltraCinematic.dll`.
 
-Open ULTRAKILL's Cheat Menu and use the **CINEMATIC** category:
+---
 
-1. Enter **Cinematic Edit Mode**.
-2. Move the existing player camera normally or with ULTRAKILL's own Noclip cheat.
-3. Add at least two **Camera Points**; use **Delete Last Point** to undo the latest one.
-4. Open the timeline to adjust total Flight Time, path and easing, preview with the cursor, then start the cinematic.
+## English
 
-Edit Mode only exposes the cinematic tools. It does not enable Noclip, hide the HUD, freeze the player, or take over the camera. Player and camera takeover occurs only during playback.
+**UltraCinematic** is a BepInEx 5 mod for ULTRAKILL that creates smooth cinematic flights using the game's existing player camera. Every tool is integrated into the standard `MANAGE CHEATS` menu under the **CINEMATIC** category.
 
-While Edit Mode is enabled, all four cinematic tools report an enabled state so their assigned binds remain visible in ULTRAKILL's active-cheats HUD. Disabling Edit Mode disables all four tools again.
+### Features
 
-Camera Points are numbered from 1 and display a forward-expanding view cone. Segments are lettered from A and show their label above the world-space trail. Each point exposes editable position, rotation and FOV values with live preview. The Timeline has one total Flight Time; segment timing is derived automatically from sampled curve length, and arc-length mapping keeps the base route speed uniform. Each segment retains its independent path type (`Linear`, auto-tangent `Bezier`, or continuous `Smooth`) and easing mode. Optional Soft Points work across every Path combination and expose independent 1–45% windows before and after each internal point. Their quintic position curve preserves continuous velocity and acceleration instead of forcing the camera through an exact position at an exact frame. The first and last points remain exact.
+- create and remove Camera Points in game;
+- visualize points, camera direction, and the complete route in world space;
+- Timeline with live preview at any frame;
+- edit Position X/Y/Z, Rotation Pitch/Yaw/Roll, and FOV for every point;
+- independent `Linear`, `Bezier`, and `Smooth` Path modes per segment;
+- independent Easing modes;
+- one total Flight Time with automatic timing based on measured curve length;
+- configurable Soft Point windows before and after internal points;
+- playback in a live or completely frozen world;
+- `Pause Game` with a separate free-camera controller on frozen time;
+- named, level-specific Timeline saves;
+- load, overwrite, delete, and safely clear projects.
 
-Opening Timeline pauses the game and locks player/camera input. Dragging across its track temporarily moves both player and camera through the evaluated cinematic pose; releasing the mouse restores their exact pre-preview pose.
+### Usage
 
-Selecting a numbered point opens exact world Position X/Y/Z and Rotation Pitch/Yaw/Roll fields. Values support exact text entry and horizontal drag adjustment. `PREVIEW POINT` temporarily moves player and camera to the edited point until `RETURN` or Timeline close.
+1. Enable ULTRAKILL cheats.
+2. Open `MANAGE CHEATS` and locate the **CINEMATIC** category.
+3. Enable **Cinematic Edit Mode**.
+4. Move normally or use ULTRAKILL's own Noclip and add **Camera Points**.
+5. Open the **Timeline** and configure points, segments, total time, and cinematic settings.
+6. Inspect the route with the Timeline cursor or `PREVIEW POINT`.
+7. Run **Start Cinematic**.
 
-`CINEMATIC SETTINGS` selects `LIVE WORLD` or `FROZEN WORLD` playback. Frozen playback advances with unscaled time while gameplay, physics, particles, and projectiles remain paused.
+Edit Mode does not enable Noclip, hide the HUD, or modify weapons. Those remain under the user's control through ULTRAKILL's standard cheats.
 
-`Pause Game` is a true `DISABLED`/`ENABLED` toggle. It freezes game time and enables a temporary unscaled photo-mode controller: mouse to look, WASD to move, Space/Ctrl for vertical movement, and Shift for faster movement. Disabling it removes the custom controller and restores normal gameplay input. Cinematic Playback started while Pause Game is active temporarily suspends that mode and restores the original pose, camera, FOV, and paused-time state immediately after automatic completion or manual stop.
+### Timeline and smoothing
 
-Timeline projects can be saved by name, loaded, overwritten, and deleted from the Timeline header. A project contains all points, transforms, FOV values, segment modes, total Flight Time, playback mode, and Soft Point settings. Saves are stored as JSON under `BepInEx/config/UltraCinematic/Timelines` and are cryptographically partitioned by active scene identity; the load menu never exposes projects belonging to a different level. Loading validates the entire file before replacing the current in-memory project. `CLEAR` restores Timeline defaults only after confirmation.
+Points are circular and numbered from 1. Segments are lettered from A. Individual segment time is derived automatically from measured curve length, keeping the base spatial speed uniform when `Easing: Linear` is selected.
+
+Soft Points work with every Path combination. Internal points expose independent 1–45% smoothing windows before and after the point. A quintic transition maintains continuous velocity and acceleration, while the first and last points always remain exact.
+
+### Time modes
+
+- `LIVE WORLD` keeps the world running during playback.
+- `FROZEN WORLD` freezes gameplay, physics, particles, and projectiles while playback advances on unscaled time.
+- `Pause Game` freezes time and enables free movement with mouse, WASD, Space/Ctrl vertically, and Shift for higher speed.
+
+When playback starts from an active `Pause Game`, automatic completion and manual stop both restore the original pose, camera, FOV, and frozen-world state.
+
+### Saves
+
+The Timeline header contains `SAVE`, `LOAD`, and `CLEAR`. A project stores all points, Position/Rotation/FOV values, Path/Easing modes, Flight Time, time mode, and Soft Point settings.
+
+Save files are stored under:
+
+```text
+BepInEx/config/UltraCinematic/Timelines
+```
+
+Each project is bound to the active level identity. Saves from another level are neither listed nor loadable. A file is fully validated before it can replace the current in-memory Timeline.
+
+### Build and installation
+
+.NET Framework 4.7.2 Developer Pack, BepInEx 5, and an installed copy of ULTRAKILL are required.
+
+```powershell
+$env:ULTRAKILL_DIR = 'C:\Program Files (x86)\Steam\steamapps\common\ULTRAKILL'
+dotnet build -c Release
+```
+
+Alternatively, provide the game directory directly:
+
+```powershell
+dotnet build -c Release -p:GameDir="D:\Games\ULTRAKILL"
+```
+
+Copy `bin/Release/net472/UltraCinematic.dll` to `ULTRAKILL/BepInEx/plugins/UltraCinematic/UltraCinematic.dll`.
