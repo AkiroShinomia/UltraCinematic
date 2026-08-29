@@ -1,0 +1,9 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+# Local runtime diagnostics and reverse-engineering references.
+Логи/
+Классы/
