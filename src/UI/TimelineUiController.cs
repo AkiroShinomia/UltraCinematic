@@ -12,17 +12,21 @@ namespace UltraCinematic.UI
 {
     internal sealed class TimelineUiController : MonoBehaviour
     {
-        private enum DialogMode { None, Save, Load, Settings, ConfirmClear, ConfirmDelete, ConfirmOverwrite }
+        private enum DialogMode { None, Save, Load, Presets, Settings, ConfirmClear, ConfirmDelete, ConfirmOverwrite }
 
         private CinematicController controller;
         private UltraCinematicPreferences preferences;
         private Rect window = new Rect(30, 30, 900, 740);
         private TimelineSaveRepository saveRepository;
         private List<TimelineSaveEntry> savedProjects = new List<TimelineSaveEntry>();
+        private List<TimelineSaveEntry> savedPresets = new List<TimelineSaveEntry>();
         private TimelineSaveEntry pendingSave;
+        private DialogMode pendingReturnMode = DialogMode.Load;
         private DialogMode dialogMode;
         private Vector2 saveListScroll;
+        private Vector2 editorScroll;
         private string saveNameInput = "";
+        private bool saveAsPreset;
         private string dialogError = "";
         private string statusMessage = "";
         private string saveDirectoryInput = "";
@@ -47,9 +51,19 @@ namespace UltraCinematic.UI
         private int scrubControl;
         private float scrubStartX;
         private float scrubStartValue;
+        private readonly string[] moveAllInputs = new string[3];
+        private int moveAllInputPointCount = -1;
+        private int moveAllScrubAxis = -1;
+        private int moveAllScrubControl;
+        private float moveAllScrubStartX;
+        private float moveAllScrubStartValue;
+        private bool segmentSettingsExpanded = true;
+        private bool pointSettingsExpanded;
+        private bool moveAllExpanded;
+        private bool cinematicSettingsExpanded = true;
 
         public bool IsOpen { get; private set; }
-        public bool IsDragging => dragCursor || scrubField >= 0;
+        public bool IsDragging => dragCursor || scrubField >= 0 || moveAllScrubAxis >= 0;
 
         public void Initialize(CinematicController value)
         {
@@ -59,13 +73,28 @@ namespace UltraCinematic.UI
             saveRepository = new TimelineSaveRepository(directory);
             saveDirectoryInput = directory;
         }
-        public void Open() { IsOpen = true; SyncFlightTimeInput(); SyncSoftPointInputs(); SyncPointInputs(); }
+        public void Open() { IsOpen = true; SyncFlightTimeInput(); SyncSoftPointInputs(); SyncPointInputs(); SyncMoveAllInputs(); }
+        internal void NotifyPointInserted(int pointIndex, bool insertedIntoSegment, bool insertedBeforeFirst = false)
+        {
+            selectedPoint = pointIndex;
+            pointSettingsExpanded = true;
+            pointInputPoint = -1;
+            moveAllInputPointCount = -1;
+            SyncPointInputs();
+            SyncMoveAllInputs();
+            statusMessage = insertedBeforeFirst
+                ? UiText.T("The new Camera Point is now Point 1.", "Новая точка камеры стала точкой 1.")
+                : insertedIntoSegment
+                    ? UiText.F("Camera Point {0} inserted into the selected segment.", "Точка камеры {0} вставлена в выбранный сегмент.", pointIndex + 1)
+                    : UiText.F("Camera Point {0} added.", "Точка камеры {0} добавлена.", pointIndex + 1);
+        }
         public void Close()
         {
             IsOpen = false;
             dragCursor = false;
             pointPreviewActive = false;
             scrubField = -1;
+            moveAllScrubAxis = -1;
             pointInputPoint = -1;
             dialogMode = DialogMode.None;
             pendingSave = null;
@@ -118,26 +147,44 @@ namespace UltraCinematic.UI
             CinematicTimeline timeline = controller.Timeline;
             if (dialogMode == DialogMode.None)
             {
-                if (GUI.Button(new Rect(8f, 2f, 68f, 20f), UiText.T("SAVE", "СОХР."))) OpenSaveDialog();
-                if (GUI.Button(new Rect(80f, 2f, 68f, 20f), UiText.T("LOAD", "ЗАГР."))) OpenLoadDialog();
+                if (GUI.Button(new Rect(8f, 2f, 90f, 20f), UiText.T("SAVE AS", "СОХР. КАК"))) OpenSaveDialog();
+                if (GUI.Button(new Rect(102f, 2f, 68f, 20f), UiText.T("LOAD", "ЗАГР."))) OpenLoadDialog();
+                if (GUI.Button(new Rect(174f, 2f, 92f, 20f), UiText.T("PRESETS", "ПРЕСЕТЫ"))) OpenPresetsDialog();
                 if (GUI.Button(new Rect(window.width - 246f, 2f, 68f, 20f), UiText.T("CLEAR", "ОЧИСТ."))) { dialogError = ""; dialogMode = DialogMode.ConfirmClear; }
                 if (GUI.Button(new Rect(window.width - 174f, 2f, 132f, 20f), UiText.T("SETTINGS", "НАСТРОЙКИ"))) OpenSettingsDialog();
             }
-            if (GUI.Button(new Rect(window.width - 38f, 2f, 30f, 20f), "X")) { controller.ToggleTimeline(); return; }
+            if (GUI.Button(new Rect(window.width - 38f, 2f, 30f, 20f), "×")) { controller.ToggleTimeline(); return; }
             if (dialogMode != DialogMode.None)
             {
                 DrawDialog(timeline);
-                GUI.DragWindow(new Rect(152f, 0f, window.width - 410f, 24f));
+                GUI.DragWindow(new Rect(270f, 0f, window.width - 520f, 24f));
                 return;
             }
-            if (!string.IsNullOrEmpty(statusMessage)) GUI.Label(new Rect(156f, 27f, window.width - 312f, 22f), statusMessage);
-
-            Rect track = new Rect(32, 58, window.width - 64, 42);
+            Rect track = new Rect(72, 72, window.width - 104, 42);
             float duration = Mathf.Max(.1f, timeline.Duration);
             GUI.Box(track, "");
             Event e = Event.current;
             bool mouseOverMarker = false;
             EnsurePointMarkerResources();
+
+            if (timeline.Keyframes.Count > 0)
+            {
+                float firstInsertionX = track.x - 40f;
+                bool insertBeforeFirstArmed = controller.PendingInsertSegment == -2;
+                if (GUI.Button(new Rect(firstInsertionX - 14f, track.y - 40f, 28f, 22f), insertBeforeFirstArmed ? "✓" : "+"))
+                {
+                    if (insertBeforeFirstArmed)
+                    {
+                        controller.CancelPointInsertion();
+                        statusMessage = UiText.T("Camera Point insertion cancelled.", "Вставка точки камеры отменена.");
+                    }
+                    else if (controller.ArmPointInsertionBeforeFirst())
+                    {
+                        statusMessage = UiText.T("Start armed: the next added Camera Point will become Point 1.", "Начало выбрано: следующая добавленная точка камеры станет точкой 1.");
+                    }
+                }
+                GUI.Label(new Rect(firstInsertionX - 10f, track.y - 17f, 20f, 20f), "▼");
+            }
 
             for (int i = 0; i < timeline.Keyframes.Count; i++)
             {
@@ -159,6 +206,21 @@ namespace UltraCinematic.UI
             {
                 float fromX = track.x + timeline.Keyframes[i].Time / duration * track.width;
                 float toX = track.x + timeline.Keyframes[i + 1].Time / duration * track.width;
+                bool insertionArmed = controller.PendingInsertSegment == i;
+                if (GUI.Button(new Rect((fromX + toX) * .5f - 14f, track.y - 40f, 28f, 22f), insertionArmed ? "✓" : "+"))
+                {
+                    if (insertionArmed)
+                    {
+                        controller.CancelPointInsertion();
+                        statusMessage = UiText.T("Camera Point insertion cancelled.", "Вставка точки камеры отменена.");
+                    }
+                    else if (controller.ArmPointInsertion(i))
+                    {
+                        selectedSegment = i;
+                        statusMessage = UiText.F("Segment {0} armed: the next added Camera Point will be inserted here.", "Сегмент {0} выбран: следующая добавленная точка камеры будет вставлена сюда.", SegmentLabel(i));
+                    }
+                }
+                GUI.Label(new Rect((fromX + toX) * .5f - 10f, track.y - 17f, 20f, 20f), "▼");
                 GUI.Label(new Rect((fromX + toX) * .5f - 34f, track.y + 15f, 68f, 22f), SegmentLabel(i) + ": " + timeline.GetSegmentDuration(i).ToString("0.00") + UiText.T("s", "с"));
             }
 
@@ -176,16 +238,21 @@ namespace UltraCinematic.UI
             if (e.rawType == EventType.MouseDrag && dragCursor) UpdateTrackPreview(e.mousePosition.x, track, duration);
             if (e.rawType == EventType.MouseUp && dragCursor) { dragCursor = false; controller.EndTimelinePreview(); }
 
-            GUILayout.Space(112);
+            if (!string.IsNullOrEmpty(statusMessage)) GUI.Label(new Rect(32f, 124f, window.width - 64f, 22f), statusMessage);
+
+            GUILayout.Space(148);
+            editorScroll = GUILayout.BeginScrollView(editorScroll, GUILayout.Height(window.height - 184f));
             DrawSegmentSettings(timeline);
             DrawPointSettings(timeline);
+            DrawMoveAllSettings(timeline);
             DrawCinematicSettings(timeline);
             if (timeline.SegmentCount > 0)
             {
                 if (GUILayout.Button(UiText.T("START CINEMATIC", "ЗАПУСТИТЬ СИНЕМАТИК"), GUILayout.Height(30))) controller.StartPlayback();
             }
             else GUILayout.Label(UiText.T("Add at least two Camera Points to create and play a timeline.", "Добавьте минимум две точки камеры, чтобы создать и запустить таймлайн."));
-            GUI.DragWindow(new Rect(152f, 0f, window.width - 410f, 24f));
+            GUILayout.EndScrollView();
+            GUI.DragWindow(new Rect(270f, 0f, window.width - 520f, 24f));
         }
 
         private void DrawDialog(CinematicTimeline timeline)
@@ -193,24 +260,38 @@ namespace UltraCinematic.UI
             GUILayout.Space(30f);
             if (dialogMode == DialogMode.Save) DrawSaveDialog(timeline);
             else if (dialogMode == DialogMode.Load) DrawLoadDialog(timeline);
+            else if (dialogMode == DialogMode.Presets) DrawPresetsDialog(timeline);
             else if (dialogMode == DialogMode.Settings) DrawSettingsDialog();
             else if (dialogMode == DialogMode.ConfirmClear)
                 DrawConfirmation(UiText.T("CLEAR CURRENT PROJECT", "ОЧИСТИТЬ ТЕКУЩИЙ ПРОЕКТ"), UiText.T("Delete every Camera Point and restore all Timeline settings to defaults?", "Удалить все точки камеры и восстановить стандартные настройки таймлайна?"), UiText.T("CLEAR EVERYTHING", "УДАЛИТЬ ВСЁ"), DialogMode.None, ClearCurrentProject);
             else if (dialogMode == DialogMode.ConfirmDelete)
-                DrawConfirmation(UiText.T("DELETE SAVE", "УДАЛИТЬ СОХРАНЕНИЕ"), UiText.F("Permanently delete \"{0}\"?", "Навсегда удалить \"{0}\"?", SafePendingName()), UiText.T("DELETE", "УДАЛИТЬ"), DialogMode.Load, DeletePendingSave);
+                DrawConfirmation(UiText.T("DELETE SAVE", "УДАЛИТЬ СОХРАНЕНИЕ"), UiText.F("Permanently delete \"{0}\"?", "Навсегда удалить \"{0}\"?", SafePendingName()), UiText.T("DELETE", "УДАЛИТЬ"), pendingReturnMode, DeletePendingSave);
             else if (dialogMode == DialogMode.ConfirmOverwrite)
-                DrawConfirmation(UiText.T("OVERWRITE SAVE", "ПЕРЕЗАПИСАТЬ СОХРАНЕНИЕ"), UiText.F("Replace \"{0}\" with the current Timeline?", "Заменить \"{0}\" текущим таймлайном?", SafePendingName()), UiText.T("OVERWRITE", "ПЕРЕЗАПИСАТЬ"), DialogMode.Load, () => OverwritePendingSave(timeline));
+                DrawConfirmation(UiText.T("OVERWRITE SAVE", "ПЕРЕЗАПИСАТЬ СОХРАНЕНИЕ"), UiText.F("Replace \"{0}\" with the current Timeline?", "Заменить \"{0}\" текущим таймлайном?", SafePendingName()), UiText.T("OVERWRITE", "ПЕРЕЗАПИСАТЬ"), pendingReturnMode, () => OverwritePendingSave(timeline));
         }
 
         private void DrawSaveDialog(CinematicTimeline timeline)
         {
             GUILayout.BeginVertical("box");
-            GUILayout.Label(UiText.T("SAVE TIMELINE PROJECT", "СОХРАНЕНИЕ ПРОЕКТА ТАЙМЛАЙНА"));
-            GUILayout.Label(UiText.T("Level: ", "Уровень: ") + saveRepository.CurrentLevelName);
-            GUILayout.Label(UiText.T("This project can only be loaded on this level.", "Этот проект можно загрузить только на данном уровне."));
+            GUILayout.Label(UiText.T("SAVE TIMELINE AS", "СОХРАНИТЬ ТАЙМЛАЙН КАК"));
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Toggle(!saveAsPreset, UiText.T("LEVEL PROJECT", "ПРОЕКТ УРОВНЯ"), "Button", GUILayout.Height(34f)) && saveAsPreset) saveAsPreset = false;
+            if (GUILayout.Toggle(saveAsPreset, UiText.T("GLOBAL PRESET", "ОБЩИЙ ПРЕСЕТ"), "Button", GUILayout.Height(34f)) && !saveAsPreset) saveAsPreset = true;
+            GUILayout.EndHorizontal();
+            GUILayout.Space(8f);
+            if (saveAsPreset)
+            {
+                GUILayout.Label(UiText.T("Preset coordinates are stored relative to your current camera position.", "Координаты пресета сохраняются относительно текущей позиции камеры."));
+                GUILayout.Label(UiText.T("It can be loaded on any level at your new current position.", "Его можно загрузить на любом уровне в новой текущей позиции."));
+            }
+            else
+            {
+                GUILayout.Label(UiText.T("Level: ", "Уровень: ") + saveRepository.CurrentLevelName);
+                GUILayout.Label(UiText.T("This project can only be loaded on this level.", "Этот проект можно загрузить только на данном уровне."));
+            }
             GUILayout.Space(12f);
             GUILayout.BeginHorizontal();
-            GUILayout.Label(UiText.T("Project name", "Название проекта"), GUILayout.Width(130f));
+            GUILayout.Label(saveAsPreset ? UiText.T("Preset name", "Название пресета") : UiText.T("Project name", "Название проекта"), GUILayout.Width(130f));
             GUI.SetNextControlName("timeline-save-name");
             saveNameInput = GUILayout.TextField(saveNameInput ?? "", 64);
             GUILayout.EndHorizontal();
@@ -221,9 +302,23 @@ namespace UltraCinematic.UI
             if (GUILayout.Button(UiText.T("SAVE", "СОХРАНИТЬ"), GUILayout.Height(30f)))
             {
                 string error;
-                if (saveRepository.Create(saveNameInput, timeline, out error))
+                bool saved;
+                if (saveAsPreset)
                 {
-                    statusMessage = UiText.T("Saved project: ", "Проект сохранён: ") + saveNameInput.Trim();
+                    Vector3 anchor;
+                    if (!controller.TryGetPresetAnchor(out anchor))
+                    {
+                        dialogError = UiText.T("Could not find the current camera position.", "Не удалось определить текущую позицию камеры.");
+                        GUILayout.EndHorizontal();
+                        GUILayout.EndVertical();
+                        return;
+                    }
+                    saved = saveRepository.CreatePreset(saveNameInput, timeline, anchor, out error);
+                }
+                else saved = saveRepository.Create(saveNameInput, timeline, out error);
+                if (saved)
+                {
+                    statusMessage = (saveAsPreset ? UiText.T("Saved preset: ", "Пресет сохранён: ") : UiText.T("Saved project: ", "Проект сохранён: ")) + saveNameInput.Trim();
                     dialogMode = DialogMode.None;
                     dialogError = "";
                 }
@@ -262,8 +357,41 @@ namespace UltraCinematic.UI
             GUILayout.EndVertical();
 
             if (loadEntry != null) LoadProject(loadEntry, timeline);
-            else if (overwriteEntry != null) { pendingSave = overwriteEntry; dialogError = ""; dialogMode = DialogMode.ConfirmOverwrite; }
-            else if (deleteEntry != null) { pendingSave = deleteEntry; dialogError = ""; dialogMode = DialogMode.ConfirmDelete; }
+            else if (overwriteEntry != null) { pendingSave = overwriteEntry; pendingReturnMode = DialogMode.Load; dialogError = ""; dialogMode = DialogMode.ConfirmOverwrite; }
+            else if (deleteEntry != null) { pendingSave = deleteEntry; pendingReturnMode = DialogMode.Load; dialogError = ""; dialogMode = DialogMode.ConfirmDelete; }
+        }
+
+        private void DrawPresetsDialog(CinematicTimeline timeline)
+        {
+            GUILayout.BeginVertical("box");
+            GUILayout.Label(UiText.T("GLOBAL CINEMATIC PRESETS", "ОБЩИЕ ПРЕСЕТЫ СИНЕМАТИКА"));
+            GUILayout.Label(UiText.T("Presets can be loaded on any level and are placed relative to your current camera position.", "Пресеты можно загружать на любом уровне; они размещаются относительно текущей позиции камеры."));
+            DrawDialogError();
+            saveListScroll = GUILayout.BeginScrollView(saveListScroll, GUILayout.Height(window.height - 145f));
+            if (savedPresets.Count == 0) GUILayout.Label(UiText.T("No cinematic presets have been saved yet.", "Сохранённых пресетов пока нет."));
+
+            TimelineSaveEntry loadEntry = null, overwriteEntry = null, deleteEntry = null;
+            for (int i = 0; i < savedPresets.Count; i++)
+            {
+                TimelineSaveEntry entry = savedPresets[i];
+                GUILayout.BeginHorizontal("box");
+                GUILayout.BeginVertical();
+                GUILayout.Label(entry.Data.ProjectName);
+                GUILayout.Label(entry.Data.Points.Length + UiText.T(" points  •  ", " точек  •  ") + entry.Data.FlightDuration.ToString("0.00") + UiText.T("s  •  ", "с  •  ") + FormatModifiedTime(entry.Data.ModifiedUtcTicks));
+                if (!string.IsNullOrEmpty(entry.Warning)) GUILayout.Label(UiText.T("WARNING: ", "ПРЕДУПРЕЖДЕНИЕ: ") + entry.Warning);
+                GUILayout.EndVertical();
+                if (GUILayout.Button(UiText.T("LOAD", "ЗАГРУЗИТЬ"), GUILayout.Width(90f), GUILayout.Height(42f))) loadEntry = entry;
+                if (GUILayout.Button(UiText.T("OVERWRITE", "ПЕРЕЗАПИСАТЬ"), GUILayout.Width(130f), GUILayout.Height(42f))) overwriteEntry = entry;
+                if (GUILayout.Button(UiText.T("DELETE", "УДАЛИТЬ"), GUILayout.Width(90f), GUILayout.Height(42f))) deleteEntry = entry;
+                GUILayout.EndHorizontal();
+            }
+            GUILayout.EndScrollView();
+            if (GUILayout.Button(UiText.T("BACK", "НАЗАД"), GUILayout.Height(30f))) { dialogMode = DialogMode.None; dialogError = ""; }
+            GUILayout.EndVertical();
+
+            if (loadEntry != null) LoadPreset(loadEntry, timeline);
+            else if (overwriteEntry != null) { pendingSave = overwriteEntry; pendingReturnMode = DialogMode.Presets; dialogError = ""; dialogMode = DialogMode.ConfirmOverwrite; }
+            else if (deleteEntry != null) { pendingSave = deleteEntry; pendingReturnMode = DialogMode.Presets; dialogError = ""; dialogMode = DialogMode.ConfirmDelete; }
         }
 
         private void DrawSettingsDialog()
@@ -308,7 +436,7 @@ namespace UltraCinematic.UI
             GUILayout.EndHorizontal();
 
             GUILayout.Space(14f);
-            GUILayout.Label(UiText.T("Timeline saves folder", "Папка сохранений таймлайна"));
+            GUILayout.Label(UiText.T("Projects and presets folder", "Папка проектов и пресетов"));
             GUILayout.Label(UiText.T("Current folder:", "Текущая папка:"));
             GUILayout.TextArea(saveRepository.RootDirectory, GUILayout.Height(44f));
             GUILayout.Label(UiText.T("New absolute folder path:", "Новый полный путь к папке:"));
@@ -317,7 +445,7 @@ namespace UltraCinematic.UI
             if (GUILayout.Button(UiText.T("APPLY FOLDER", "ПРИМЕНИТЬ ПАПКУ"), GUILayout.Height(32f))) ApplySaveDirectory();
             if (GUILayout.Button(UiText.T("USE DEFAULT", "ВЕРНУТЬ СТАНДАРТНУЮ"), GUILayout.Height(32f))) ResetSaveDirectory();
             GUILayout.EndHorizontal();
-            GUILayout.Label(UiText.T("Changing the folder does not move existing project files.", "При смене папки существующие файлы проектов не перемещаются."));
+            GUILayout.Label(UiText.T("Changing the folder does not move existing project or preset files.", "При смене папки существующие файлы проектов и пресетов не перемещаются."));
 
             if (!string.IsNullOrEmpty(settingsError)) GUILayout.Label(UiText.T("ERROR: ", "ОШИБКА: ") + settingsError);
             else if (!string.IsNullOrEmpty(settingsMessage)) GUILayout.Label(settingsMessage);
@@ -344,7 +472,7 @@ namespace UltraCinematic.UI
             saveDirectoryInput = preferences.TimelineDirectory;
             saveRepository.SetRootDirectory(preferences.TimelineDirectory);
             settingsError = "";
-            settingsMessage = UiText.T("Timeline save folder updated.", "Папка сохранений таймлайна обновлена.");
+            settingsMessage = UiText.T("Project and preset folder updated.", "Папка проектов и пресетов обновлена.");
         }
 
         private void ResetSaveDirectory()
@@ -359,7 +487,7 @@ namespace UltraCinematic.UI
             saveDirectoryInput = preferences.TimelineDirectory;
             saveRepository.SetRootDirectory(preferences.TimelineDirectory);
             settingsError = "";
-            settingsMessage = UiText.T("Default Timeline save folder restored.", "Стандартная папка сохранений таймлайна восстановлена.");
+            settingsMessage = UiText.T("Default project and preset folder restored.", "Стандартная папка проектов и пресетов восстановлена.");
         }
 
         private void DrawConfirmation(string title, string message, string confirmLabel, DialogMode cancelMode, Action confirmAction)
@@ -381,6 +509,7 @@ namespace UltraCinematic.UI
         {
             EndPointPreview();
             saveNameInput = "";
+            saveAsPreset = false;
             dialogError = "";
             dialogMode = DialogMode.Save;
         }
@@ -390,6 +519,13 @@ namespace UltraCinematic.UI
             EndPointPreview();
             RefreshSavedProjects();
             dialogMode = DialogMode.Load;
+        }
+
+        private void OpenPresetsDialog()
+        {
+            EndPointPreview();
+            RefreshSavedPresets();
+            dialogMode = DialogMode.Presets;
         }
 
         private void OpenSettingsDialog()
@@ -409,6 +545,14 @@ namespace UltraCinematic.UI
             saveListScroll = Vector2.zero;
         }
 
+        private void RefreshSavedPresets()
+        {
+            string error;
+            savedPresets = saveRepository.ListPresets(out error);
+            dialogError = error;
+            saveListScroll = Vector2.zero;
+        }
+
         private void LoadProject(TimelineSaveEntry entry, CinematicTimeline timeline)
         {
             controller.EndTimelinePreview();
@@ -420,25 +564,56 @@ namespace UltraCinematic.UI
             dialogMode = DialogMode.None;
         }
 
+        private void LoadPreset(TimelineSaveEntry entry, CinematicTimeline timeline)
+        {
+            controller.EndTimelinePreview();
+            Vector3 anchor;
+            if (!controller.TryGetPresetAnchor(out anchor))
+            {
+                dialogError = UiText.T("Could not find the current camera position.", "Не удалось определить текущую позицию камеры.");
+                return;
+            }
+            string error;
+            if (!saveRepository.ApplyPreset(entry, timeline, anchor, out error)) { dialogError = error; return; }
+            ResetEditorSelection();
+            controller.NotifyTimelineProjectChanged();
+            statusMessage = UiText.T("Loaded preset: ", "Пресет загружен: ") + entry.Data.ProjectName;
+            dialogMode = DialogMode.None;
+        }
+
         private void OverwritePendingSave(CinematicTimeline timeline)
         {
             string error;
-            if (!saveRepository.Overwrite(pendingSave, timeline, out error)) { dialogError = error; return; }
-            statusMessage = UiText.T("Overwritten project: ", "Проект перезаписан: ") + SafePendingName();
+            bool isPreset = pendingSave != null && pendingSave.Data != null && pendingSave.Data.IsPreset;
+            bool overwritten;
+            if (isPreset)
+            {
+                Vector3 anchor;
+                if (!controller.TryGetPresetAnchor(out anchor))
+                {
+                    dialogError = UiText.T("Could not find the current camera position.", "Не удалось определить текущую позицию камеры.");
+                    return;
+                }
+                overwritten = saveRepository.OverwritePreset(pendingSave, timeline, anchor, out error);
+            }
+            else overwritten = saveRepository.Overwrite(pendingSave, timeline, out error);
+            if (!overwritten) { dialogError = error; return; }
+            statusMessage = (isPreset ? UiText.T("Overwritten preset: ", "Пресет перезаписан: ") : UiText.T("Overwritten project: ", "Проект перезаписан: ")) + SafePendingName();
             pendingSave = null;
-            RefreshSavedProjects();
-            dialogMode = DialogMode.Load;
+            if (isPreset) RefreshSavedPresets(); else RefreshSavedProjects();
+            dialogMode = isPreset ? DialogMode.Presets : DialogMode.Load;
         }
 
         private void DeletePendingSave()
         {
             string deletedName = SafePendingName();
+            bool isPreset = pendingSave != null && pendingSave.Data != null && pendingSave.Data.IsPreset;
             string error;
             if (!saveRepository.Delete(pendingSave, out error)) { dialogError = error; return; }
-            statusMessage = UiText.T("Deleted project: ", "Проект удалён: ") + deletedName;
+            statusMessage = (isPreset ? UiText.T("Deleted preset: ", "Пресет удалён: ") : UiText.T("Deleted project: ", "Проект удалён: ")) + deletedName;
             pendingSave = null;
-            RefreshSavedProjects();
-            dialogMode = DialogMode.Load;
+            if (isPreset) RefreshSavedPresets(); else RefreshSavedProjects();
+            dialogMode = isPreset ? DialogMode.Presets : DialogMode.Load;
         }
 
         private void ClearCurrentProject()
@@ -460,8 +635,10 @@ namespace UltraCinematic.UI
             selectedSegment = 0;
             pointInputPoint = -1;
             scrubField = -1;
+            moveAllScrubAxis = -1;
             SyncFlightTimeInput();
             SyncSoftPointInputs();
+            SyncMoveAllInputs();
         }
 
         private void DrawDialogError()
@@ -508,7 +685,11 @@ namespace UltraCinematic.UI
         private void DrawSegmentSettings(CinematicTimeline timeline)
         {
             GUILayout.BeginVertical("box");
-            GUILayout.Label(UiText.T("SEGMENT SETTINGS", "НАСТРОЙКИ СЕГМЕНТА"));
+            if (!DrawSectionHeader(UiText.T("SEGMENT SETTINGS", "НАСТРОЙКИ СЕГМЕНТА"), ref segmentSettingsExpanded))
+            {
+                GUILayout.EndVertical();
+                return;
+            }
             if (timeline.SegmentCount > 0)
             {
                 selectedSegment = Mathf.Clamp(selectedSegment, 0, timeline.SegmentCount - 1);
@@ -521,10 +702,6 @@ namespace UltraCinematic.UI
                 foreach (PathType path in System.Enum.GetValues(typeof(PathType)))
                     if (GUILayout.Toggle(timeline.GetPath(selectedSegment) == path, PathLabel(path), "Button") && timeline.GetPath(selectedSegment) != path) { timeline.SetPath(selectedSegment, path); controller.RefreshVisualization(); }
                 GUILayout.EndHorizontal();
-                GUILayout.BeginHorizontal(); GUILayout.Label(UiText.T("Easing", "Сглаживание"), GUILayout.Width(90));
-                foreach (EasingType easing in System.Enum.GetValues(typeof(EasingType)))
-                    if (GUILayout.Toggle(timeline.GetEasing(selectedSegment) == easing, EasingLabel(easing), "Button") && timeline.GetEasing(selectedSegment) != easing) { timeline.SetEasing(selectedSegment, easing); controller.RefreshVisualization(); }
-                GUILayout.EndHorizontal();
             }
             else GUILayout.Label(UiText.T("No segments yet.", "Сегментов пока нет."));
             GUILayout.EndVertical();
@@ -533,7 +710,11 @@ namespace UltraCinematic.UI
         private void DrawPointSettings(CinematicTimeline timeline)
         {
             GUILayout.BeginVertical("box");
-            GUILayout.Label(UiText.T("CAMERA POINT SETTINGS", "НАСТРОЙКИ ТОЧКИ КАМЕРЫ"));
+            if (!DrawSectionHeader(UiText.T("CAMERA POINT SETTINGS", "НАСТРОЙКИ ТОЧКИ КАМЕРЫ"), ref pointSettingsExpanded))
+            {
+                GUILayout.EndVertical();
+                return;
+            }
             if (selectedPoint < 0 || selectedPoint >= timeline.Points.Count)
             {
                 GUILayout.Label(UiText.T("Click a numbered Camera Point on the Timeline to edit its transform.", "Нажмите на пронумерованную точку камеры на таймлайне, чтобы изменить её параметры."));
@@ -559,6 +740,7 @@ namespace UltraCinematic.UI
             GUILayout.EndVertical();
             GUILayout.EndHorizontal();
 
+            GUILayout.BeginHorizontal();
             string previewLabel = pointPreviewActive ? UiText.T("RETURN", "ВЕРНУТЬСЯ") : UiText.T("PREVIEW POINT", "ПРЕДПРОСМОТР ТОЧКИ");
             if (GUILayout.Button(previewLabel, GUILayout.Height(26)))
             {
@@ -573,13 +755,156 @@ namespace UltraCinematic.UI
                     }
                 }
             }
+            if (GUILayout.Button(UiText.T("DELETE POINT", "УДАЛИТЬ ТОЧКУ"), GUILayout.Height(26), GUILayout.Width(170f))) DeleteSelectedPoint();
+            GUILayout.EndHorizontal();
             GUILayout.EndVertical();
+        }
+
+        private void DeleteSelectedPoint()
+        {
+            int deletedPoint = selectedPoint;
+            EndPointPreview();
+            if (!controller.DeleteCameraPoint(deletedPoint)) return;
+            selectedPoint = controller.Timeline.Points.Count == 0 ? -1 : Mathf.Min(deletedPoint, controller.Timeline.Points.Count - 1);
+            selectedSegment = Mathf.Clamp(selectedPoint == controller.Timeline.Points.Count - 1 ? selectedPoint - 1 : selectedPoint, 0, Mathf.Max(0, controller.Timeline.SegmentCount - 1));
+            pointInputPoint = -1;
+            moveAllInputPointCount = -1;
+            SyncPointInputs();
+            SyncMoveAllInputs();
+            statusMessage = UiText.F("Camera Point {0} deleted. Point numbering was updated.", "Точка камеры {0} удалена. Нумерация точек обновлена.", deletedPoint + 1);
+        }
+
+        private void DrawMoveAllSettings(CinematicTimeline timeline)
+        {
+            GUILayout.BeginVertical("box");
+            if (!DrawSectionHeader(UiText.T("MOVE ALL CAMERA POINTS", "ПЕРЕМЕСТИТЬ ВСЕ ТОЧКИ"), ref moveAllExpanded))
+            {
+                GUILayout.EndVertical();
+                return;
+            }
+            if (timeline.Points.Count == 0)
+            {
+                GUILayout.Label(UiText.T("Add at least one Camera Point before moving the route.", "Добавьте хотя бы одну точку камеры, чтобы перемещать маршрут."));
+                GUILayout.EndVertical();
+                return;
+            }
+
+            EnsureMoveAllInputs();
+            GUILayout.Label(UiText.T("The fields show the average center of all Camera Points. Changing one axis moves every point by the same offset.", "Поля показывают средний центр всех точек камеры. Изменение оси сдвигает все точки на одинаковое расстояние."));
+            DrawMoveAllField("X", 0);
+            DrawMoveAllField("Y", 1);
+            DrawMoveAllField("Z", 2);
+            GUILayout.EndVertical();
+        }
+
+        private bool DrawSectionHeader(string title, ref bool expanded)
+        {
+            if (GUILayout.Button((expanded ? "▼  " : "▶  ") + title, GUILayout.Height(24f))) expanded = !expanded;
+            return expanded;
+        }
+
+        private void DrawMoveAllField(string label, int axis)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(UiText.T("Center ", "Центр ") + label, GUILayout.Width(90f));
+            GUI.SetNextControlName("move-all-field-" + axis);
+            moveAllInputs[axis] = GUILayout.TextField(moveAllInputs[axis] ?? "0.00", GUILayout.Width(110f));
+            if (GUILayout.Button(UiText.T("SET", "ЗАДАТЬ"), GUILayout.Width(64f))) ApplyMoveAllInput(axis);
+            Rect scrubRect = GUILayoutUtility.GetRect(92f, 22f, GUILayout.Width(92f));
+            GUI.Box(scrubRect, UiText.T("↔ DRAG", "↔ ТЯНУТЬ"));
+            HandleMoveAllScrub(scrubRect, axis);
+            if (Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Return && GUI.GetNameOfFocusedControl() == "move-all-field-" + axis)
+            {
+                ApplyMoveAllInput(axis);
+                Event.current.Use();
+            }
+            GUILayout.EndHorizontal();
+        }
+
+        private void HandleMoveAllScrub(Rect rect, int axis)
+        {
+            Event e = Event.current;
+            int control = GUIUtility.GetControlID(18000 + axis, FocusType.Passive, rect);
+            if (e.type == EventType.MouseDown && e.button == 0 && rect.Contains(e.mousePosition))
+            {
+                moveAllScrubAxis = axis;
+                moveAllScrubControl = control;
+                moveAllScrubStartX = e.mousePosition.x;
+                moveAllScrubStartValue = GetVectorAxis(GetTimelineCenter(controller.Timeline), axis);
+                GUIUtility.hotControl = control;
+                e.Use();
+            }
+            else if (e.type == EventType.MouseDrag && moveAllScrubAxis == axis && GUIUtility.hotControl == moveAllScrubControl)
+            {
+                ApplyMoveAllValue(axis, moveAllScrubStartValue + (e.mousePosition.x - moveAllScrubStartX) * .02f);
+                e.Use();
+            }
+            else if (e.rawType == EventType.MouseUp && moveAllScrubAxis == axis)
+            {
+                moveAllScrubAxis = -1;
+                GUIUtility.hotControl = 0;
+            }
+        }
+
+        private void ApplyMoveAllInput(int axis)
+        {
+            float value;
+            string normalized = (moveAllInputs[axis] ?? "").Replace(',', '.');
+            if (float.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out value)) ApplyMoveAllValue(axis, value);
+            else SyncMoveAllInputs();
+        }
+
+        private void ApplyMoveAllValue(int axis, float targetValue)
+        {
+            CinematicTimeline timeline = controller.Timeline;
+            if (timeline.Points.Count == 0 || float.IsNaN(targetValue) || float.IsInfinity(targetValue)) return;
+            Vector3 center = GetTimelineCenter(timeline);
+            float offset = targetValue - GetVectorAxis(center, axis);
+            Vector3 translation = axis == 0 ? new Vector3(offset, 0f, 0f) : axis == 1 ? new Vector3(0f, offset, 0f) : new Vector3(0f, 0f, offset);
+            for (int i = 0; i < timeline.Points.Count; i++) timeline.Points[i].Position += translation;
+            timeline.RebuildAutomaticTiming();
+            SyncMoveAllInputs();
+            SyncPointInputs();
+            controller.RefreshVisualization();
+            if (pointPreviewActive && selectedPoint >= 0 && selectedPoint < timeline.Points.Count) controller.PreviewCameraPoint(timeline.Points[selectedPoint]);
+        }
+
+        private void EnsureMoveAllInputs()
+        {
+            if (moveAllInputPointCount != controller.Timeline.Points.Count && moveAllScrubAxis < 0) SyncMoveAllInputs();
+        }
+
+        private void SyncMoveAllInputs()
+        {
+            if (controller == null) return;
+            moveAllInputPointCount = controller.Timeline.Points.Count;
+            Vector3 center = GetTimelineCenter(controller.Timeline);
+            moveAllInputs[0] = center.x.ToString("0.00", CultureInfo.InvariantCulture);
+            moveAllInputs[1] = center.y.ToString("0.00", CultureInfo.InvariantCulture);
+            moveAllInputs[2] = center.z.ToString("0.00", CultureInfo.InvariantCulture);
+        }
+
+        private static Vector3 GetTimelineCenter(CinematicTimeline timeline)
+        {
+            if (timeline == null || timeline.Points.Count == 0) return Vector3.zero;
+            Vector3 center = Vector3.zero;
+            for (int i = 0; i < timeline.Points.Count; i++) center += timeline.Points[i].Position;
+            return center / timeline.Points.Count;
+        }
+
+        private static float GetVectorAxis(Vector3 value, int axis)
+        {
+            return axis == 0 ? value.x : axis == 1 ? value.y : value.z;
         }
 
         private void DrawCinematicSettings(CinematicTimeline timeline)
         {
             GUILayout.BeginVertical("box");
-            GUILayout.Label(UiText.T("CINEMATIC SETTINGS", "НАСТРОЙКИ ПРОЛЁТА"));
+            if (!DrawSectionHeader(UiText.T("CINEMATIC SETTINGS", "НАСТРОЙКИ ПРОЛЁТА"), ref cinematicSettingsExpanded))
+            {
+                GUILayout.EndVertical();
+                return;
+            }
             GUILayout.BeginHorizontal();
             GUILayout.Label(UiText.T("Flight time", "Время пролёта"), GUILayout.Width(120));
             if (GUILayout.Button("-0.10", GUILayout.Width(58))) SetFlightTime(Mathf.Max(.1f, timeline.FlightDuration - .1f));
@@ -626,6 +951,7 @@ namespace UltraCinematic.UI
         {
             if (selectedPoint != index) EndPointPreview();
             selectedPoint = index;
+            pointSettingsExpanded = true;
             selectedSegment = Mathf.Clamp(index == controller.Timeline.Keyframes.Count - 1 ? index - 1 : index, 0, Mathf.Max(0, controller.Timeline.SegmentCount - 1));
             pointInputPoint = -1;
             SyncPointInputs();
@@ -717,6 +1043,7 @@ namespace UltraCinematic.UI
                 point.FieldOfView = appliedValue;
             }
             pointInputs[field] = appliedValue.ToString("0.00", CultureInfo.InvariantCulture);
+            SyncMoveAllInputs();
             controller.RefreshVisualization();
             if (pointPreviewActive) controller.PreviewCameraPoint(point);
         }
@@ -792,14 +1119,6 @@ namespace UltraCinematic.UI
             if (path == PathType.Linear) return UiText.T("Linear", "Линейная");
             if (path == PathType.Bezier) return UiText.T("Bezier", "Безье");
             return UiText.T("Smooth", "Плавная");
-        }
-
-        private static string EasingLabel(EasingType easing)
-        {
-            if (easing == EasingType.Linear) return UiText.T("Linear", "Линейное");
-            if (easing == EasingType.EaseIn) return UiText.T("Ease In", "Разгон");
-            if (easing == EasingType.EaseOut) return UiText.T("Ease Out", "Торможение");
-            return UiText.T("Ease In/Out", "Разгон и торможение");
         }
 
         private GUISkin GetDarkSkin(GUISkin source)

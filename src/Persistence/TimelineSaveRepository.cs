@@ -17,6 +17,7 @@ namespace UltraCinematic.Persistence
     internal sealed class TimelineProjectData
     {
         public int SchemaVersion = 1;
+        public bool IsPreset;
         public string ProjectId;
         public string ProjectName;
         public string LevelId;
@@ -87,12 +88,34 @@ namespace UltraCinematic.Persistence
                     TimelineProjectData data;
                     string validationError;
                     string warning;
-                    if (!TryRead(file, levelId, out data, out validationError, out warning)) continue;
+                    if (!TryRead(file, levelId, false, out data, out validationError, out warning)) continue;
                     result.Add(new TimelineSaveEntry { Data = data, FilePath = file, Warning = warning });
                 }
                 result.Sort((a, b) => b.Data.ModifiedUtcTicks.CompareTo(a.Data.ModifiedUtcTicks));
             }
             catch (Exception exception) { error = UiText.T("Could not list saves: ", "Не удалось получить список сохранений: ") + exception.Message; }
+            return result;
+        }
+
+        internal List<TimelineSaveEntry> ListPresets(out string error)
+        {
+            error = "";
+            List<TimelineSaveEntry> result = new List<TimelineSaveEntry>();
+            try
+            {
+                string directory = PresetDirectory();
+                if (!Directory.Exists(directory)) return result;
+                foreach (string file in Directory.GetFiles(directory, "*.json", SearchOption.TopDirectoryOnly))
+                {
+                    TimelineProjectData data;
+                    string validationError;
+                    string warning;
+                    if (!TryRead(file, "", true, out data, out validationError, out warning)) continue;
+                    result.Add(new TimelineSaveEntry { Data = data, FilePath = file, Warning = warning });
+                }
+                result.Sort((a, b) => b.Data.ModifiedUtcTicks.CompareTo(a.Data.ModifiedUtcTicks));
+            }
+            catch (Exception exception) { error = UiText.T("Could not list presets: ", "Не удалось получить список пресетов: ") + exception.Message; }
             return result;
         }
 
@@ -110,14 +133,41 @@ namespace UltraCinematic.Persistence
                 return false;
             }
 
-            TimelineProjectData data = Capture(timeline, normalizedName, Guid.NewGuid().ToString("N"));
+            TimelineProjectData data = Capture(timeline, normalizedName, Guid.NewGuid().ToString("N"), false, Vector3.zero);
+            return Write(data, null, out error);
+        }
+
+        internal bool CreatePreset(string presetName, CinematicTimeline timeline, Vector3 anchor, out string error)
+        {
+            error = ValidateProjectName(presetName);
+            if (error.Length > 0) return false;
+            string normalizedName = presetName.Trim();
+            string listError;
+            List<TimelineSaveEntry> existing = ListPresets(out listError);
+            if (listError.Length > 0) { error = listError; return false; }
+            if (existing.Exists(entry => string.Equals(entry.Data.ProjectName, normalizedName, StringComparison.OrdinalIgnoreCase)))
+            {
+                error = UiText.T("A preset with this name already exists. Use OVERWRITE in PRESETS.", "Пресет с таким именем уже существует. Используйте ПЕРЕЗАПИСАТЬ в меню ПРЕСЕТЫ.");
+                return false;
+            }
+
+            TimelineProjectData data = Capture(timeline, normalizedName, Guid.NewGuid().ToString("N"), true, anchor);
             return Write(data, null, out error);
         }
 
         internal bool Overwrite(TimelineSaveEntry entry, CinematicTimeline timeline, out string error)
         {
             if (entry == null || entry.Data == null) { error = UiText.T("Save entry is unavailable.", "Сохранение недоступно."); return false; }
-            TimelineProjectData data = Capture(timeline, entry.Data.ProjectName, entry.Data.ProjectId);
+            if (entry.Data.IsPreset) { error = UiText.T("This entry is a preset.", "Эта запись является пресетом."); return false; }
+            TimelineProjectData data = Capture(timeline, entry.Data.ProjectName, entry.Data.ProjectId, false, Vector3.zero);
+            return Write(data, entry.FilePath, out error);
+        }
+
+        internal bool OverwritePreset(TimelineSaveEntry entry, CinematicTimeline timeline, Vector3 anchor, out string error)
+        {
+            if (entry == null || entry.Data == null) { error = UiText.T("Preset entry is unavailable.", "Пресет недоступен."); return false; }
+            if (!entry.Data.IsPreset) { error = UiText.T("This entry is not a preset.", "Эта запись не является пресетом."); return false; }
+            TimelineProjectData data = Capture(timeline, entry.Data.ProjectName, entry.Data.ProjectId, true, anchor);
             return Write(data, entry.FilePath, out error);
         }
 
@@ -135,44 +185,63 @@ namespace UltraCinematic.Persistence
 
         internal bool Apply(TimelineSaveEntry entry, CinematicTimeline timeline, out string error)
         {
+            return ApplyInternal(entry, timeline, Vector3.zero, false, out error);
+        }
+
+        internal bool ApplyPreset(TimelineSaveEntry entry, CinematicTimeline timeline, Vector3 anchor, out string error)
+        {
+            return ApplyInternal(entry, timeline, anchor, true, out error);
+        }
+
+        private bool ApplyInternal(TimelineSaveEntry entry, CinematicTimeline timeline, Vector3 anchor, bool expectPreset, out string error)
+        {
             error = "";
             if (entry == null || entry.Data == null) { error = UiText.T("Save entry is unavailable.", "Сохранение недоступно."); return false; }
-            string validationError = Validate(entry.Data, CurrentLevelId());
+            string validationError = Validate(entry.Data, expectPreset ? "" : CurrentLevelId(), expectPreset);
             if (validationError.Length > 0) { error = validationError; return false; }
 
             TimelineProjectData data = entry.Data;
-            timeline.Clear();
-            for (int i = 0; i < data.Points.Length; i++)
+            timeline.BeginBatchUpdate();
+            try
             {
-                TimelinePointData point = data.Points[i];
-                timeline.Add(new CameraPoint
+                timeline.Clear();
+                for (int i = 0; i < data.Points.Length; i++)
                 {
-                    Position = new Vector3(point.PositionX, point.PositionY, point.PositionZ),
-                    Rotation = new Quaternion(point.RotationX, point.RotationY, point.RotationZ, point.RotationW),
-                    FieldOfView = point.FieldOfView
-                });
+                    TimelinePointData point = data.Points[i];
+                    timeline.Add(new CameraPoint
+                    {
+                        Position = new Vector3(point.PositionX, point.PositionY, point.PositionZ) + (expectPreset ? anchor : Vector3.zero),
+                        Rotation = new Quaternion(point.RotationX, point.RotationY, point.RotationZ, point.RotationW),
+                        FieldOfView = point.FieldOfView
+                    });
+                }
+                for (int i = 0; i < data.Segments.Length; i++)
+                {
+                    timeline.SetPath(i, (PathType)data.Segments[i].PathType);
+                    timeline.SetEasing(i, (EasingType)data.Segments[i].EasingType);
+                }
+                timeline.SetFlightDuration(data.FlightDuration);
+                timeline.SetSoftPointWindows(data.SoftPointIncomingPercent, data.SoftPointOutgoingPercent);
+                timeline.SetSoftPointsEnabled(data.SoftPointsEnabled);
+                timeline.PlaybackMode = (CinematicPlaybackMode)data.PlaybackMode;
             }
-            for (int i = 0; i < data.Segments.Length; i++)
+            finally
             {
-                timeline.SetPath(i, (PathType)data.Segments[i].PathType);
-                timeline.SetEasing(i, (EasingType)data.Segments[i].EasingType);
+                timeline.EndBatchUpdate();
             }
-            timeline.SetFlightDuration(data.FlightDuration);
-            timeline.SetSoftPointWindows(data.SoftPointIncomingPercent, data.SoftPointOutgoingPercent);
-            timeline.SetSoftPointsEnabled(data.SoftPointsEnabled);
-            timeline.PlaybackMode = (CinematicPlaybackMode)data.PlaybackMode;
             timeline.CursorTime = 0f;
             return true;
         }
 
-        private TimelineProjectData Capture(CinematicTimeline timeline, string projectName, string projectId)
+        private TimelineProjectData Capture(CinematicTimeline timeline, string projectName, string projectId, bool isPreset, Vector3 anchor)
         {
             TimelineProjectData data = new TimelineProjectData
             {
                 SchemaVersion = SchemaVersion,
+                IsPreset = isPreset,
                 ProjectId = projectId,
                 ProjectName = projectName,
-                LevelId = CurrentLevelId(),
+                LevelId = isPreset ? "" : CurrentLevelId(),
                 ModifiedUtcTicks = DateTime.UtcNow.Ticks,
                 FlightDuration = timeline.FlightDuration,
                 PlaybackMode = (int)timeline.PlaybackMode,
@@ -185,9 +254,10 @@ namespace UltraCinematic.Persistence
             for (int i = 0; i < timeline.Points.Count; i++)
             {
                 CameraPoint point = timeline.Points[i];
+                Vector3 storedPosition = isPreset ? point.Position - anchor : point.Position;
                 data.Points[i] = new TimelinePointData
                 {
-                    PositionX = point.Position.x, PositionY = point.Position.y, PositionZ = point.Position.z,
+                    PositionX = storedPosition.x, PositionY = storedPosition.y, PositionZ = storedPosition.z,
                     RotationX = point.Rotation.x, RotationY = point.Rotation.y, RotationZ = point.Rotation.z, RotationW = point.Rotation.w,
                     FieldOfView = point.FieldOfView
                 };
@@ -203,7 +273,7 @@ namespace UltraCinematic.Persistence
             string temporaryPath = null;
             try
             {
-                string directory = CurrentLevelDirectory(data.LevelId);
+                string directory = data.IsPreset ? PresetDirectory() : CurrentLevelDirectory(data.LevelId);
                 Directory.CreateDirectory(directory);
                 string targetPath = existingPath ?? Path.Combine(directory, data.ProjectId + ".json");
                 temporaryPath = targetPath + ".tmp";
@@ -224,7 +294,7 @@ namespace UltraCinematic.Persistence
             }
         }
 
-        private bool TryRead(string file, string expectedLevelId, out TimelineProjectData data, out string error, out string warning)
+        private bool TryRead(string file, string expectedLevelId, bool expectPreset, out TimelineProjectData data, out string error, out string warning)
         {
             data = null;
             error = "";
@@ -238,17 +308,18 @@ namespace UltraCinematic.Persistence
                     data.Segments = new TimelineSegmentData[0];
                     warning = UiText.T("Legacy 1.4.0 save: point data was not written and cannot be recovered.", "Старое сохранение 1.4.0: данные точек не были записаны и не могут быть восстановлены.");
                 }
-                error = Validate(data, expectedLevelId);
+                error = Validate(data, expectedLevelId, expectPreset);
                 return error.Length == 0;
             }
             catch (Exception exception) { error = exception.Message; return false; }
         }
 
-        private static string Validate(TimelineProjectData data, string expectedLevelId)
+        private static string Validate(TimelineProjectData data, string expectedLevelId, bool expectPreset)
         {
             if (data == null) return UiText.T("Save data is empty.", "Файл сохранения пуст.");
             if (data.SchemaVersion != SchemaVersion) return UiText.T("Unsupported save version.", "Версия сохранения не поддерживается.");
-            if (!string.Equals(data.LevelId, expectedLevelId, StringComparison.Ordinal)) return UiText.T("This save belongs to another level.", "Это сохранение принадлежит другому уровню.");
+            if (data.IsPreset != expectPreset) return UiText.T("Save type does not match this list.", "Тип сохранения не соответствует выбранному списку.");
+            if (!expectPreset && !string.Equals(data.LevelId, expectedLevelId, StringComparison.Ordinal)) return UiText.T("This save belongs to another level.", "Это сохранение принадлежит другому уровню.");
             if (!IsValidName(data.ProjectName) || string.IsNullOrEmpty(data.ProjectId)) return UiText.T("Save identity is invalid.", "Некорректные данные сохранения.");
             if (!Finite(data.FlightDuration) || data.FlightDuration < .1f) return UiText.T("Flight time is invalid.", "Некорректное время пролёта.");
             if (!Enum.IsDefined(typeof(CinematicPlaybackMode), data.PlaybackMode)) return UiText.T("Playback mode is invalid.", "Некорректный режим пролёта.");
@@ -282,6 +353,11 @@ namespace UltraCinematic.Persistence
         {
             string safeName = SanitizeFileName(CurrentLevelName);
             return Path.Combine(root, safeName + "_" + Hash(levelId).Substring(0, 16));
+        }
+
+        private string PresetDirectory()
+        {
+            return Path.Combine(root, "Presets");
         }
 
         private static string ValidateProjectName(string value)

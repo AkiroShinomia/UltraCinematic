@@ -19,6 +19,8 @@ namespace UltraCinematic.Timeline
         private bool softPointsEnabled = true;
         private float softPointIncoming = .1f;
         private float softPointOutgoing = .1f;
+        private int batchUpdateDepth;
+        private bool rebuildPending;
         public float CursorTime { get; set; }
         public CinematicPlaybackMode PlaybackMode { get; set; } = CinematicPlaybackMode.LiveWorld;
         public float FlightDuration => flightDuration;
@@ -32,17 +34,60 @@ namespace UltraCinematic.Timeline
         {
             Points.Add(point); Keyframes.Add(new TimelineKeyframe { Point = point, Time = Keyframes.Count });
             if (Keyframes.Count > 1) { paths.Add(PathType.Linear); easings.Add(EasingType.Linear); }
-            RebuildAutomaticTiming();
+            RequestRebuild();
         }
+
+        public bool InsertAfterSegment(int segmentIndex, CameraPoint point)
+        {
+            if (point == null || segmentIndex < 0 || segmentIndex >= SegmentCount) return false;
+            PathType inheritedPath = paths[segmentIndex];
+            EasingType inheritedEasing = easings[segmentIndex];
+            int pointIndex = segmentIndex + 1;
+            Points.Insert(pointIndex, point);
+            Keyframes.Insert(pointIndex, new TimelineKeyframe { Point = point, Time = 0f });
+            paths.Insert(segmentIndex, inheritedPath);
+            easings.Insert(segmentIndex, inheritedEasing);
+            RequestRebuild();
+            return true;
+        }
+
+        public bool InsertBeforeFirst(CameraPoint point)
+        {
+            if (point == null || Keyframes.Count == 0) return false;
+            PathType inheritedPath = paths.Count == 0 ? PathType.Linear : paths[0];
+            EasingType inheritedEasing = easings.Count == 0 ? EasingType.Linear : easings[0];
+            Points.Insert(0, point);
+            Keyframes.Insert(0, new TimelineKeyframe { Point = point, Time = 0f });
+            paths.Insert(0, inheritedPath);
+            easings.Insert(0, inheritedEasing);
+            RequestRebuild();
+            return true;
+        }
+
+        public bool RemoveAt(int pointIndex)
+        {
+            if (pointIndex < 0 || pointIndex >= Keyframes.Count) return false;
+            int oldPointCount = Keyframes.Count;
+            Points.RemoveAt(pointIndex);
+            Keyframes.RemoveAt(pointIndex);
+
+            if (oldPointCount > 1)
+            {
+                int segmentToRemove;
+                if (pointIndex == 0) segmentToRemove = 0;
+                else if (pointIndex == oldPointCount - 1) segmentToRemove = paths.Count - 1;
+                else segmentToRemove = pointIndex;
+                paths.RemoveAt(segmentToRemove);
+                easings.RemoveAt(segmentToRemove);
+            }
+
+            RequestRebuild();
+            return true;
+        }
+
         public bool RemoveLast()
         {
-            if (Keyframes.Count == 0) return false;
-            Points.RemoveAt(Points.Count - 1);
-            Keyframes.RemoveAt(Keyframes.Count - 1);
-            if (paths.Count > 0) paths.RemoveAt(paths.Count - 1);
-            if (easings.Count > 0) easings.RemoveAt(easings.Count - 1);
-            RebuildAutomaticTiming();
-            return true;
+            return RemoveAt(Keyframes.Count - 1);
         }
         public TimelineSegment GetSegment(int index) => new TimelineSegment { From = Keyframes[index], To = Keyframes[index + 1], PathType = paths[index], EasingType = easings[index] };
         public PathType GetPath(int index) => paths[index];
@@ -56,21 +101,21 @@ namespace UltraCinematic.Timeline
         {
             if (index < 0 || index >= paths.Count || paths[index] == value) return;
             paths[index] = value;
-            RebuildAutomaticTiming();
+            RequestRebuild();
         }
         public void SetEasing(int index, EasingType value) { if (index >= 0 && index < easings.Count) easings[index] = value; }
         public void SetFlightDuration(float duration)
         {
             if (float.IsNaN(duration) || float.IsInfinity(duration)) return;
             flightDuration = Mathf.Max(.1f, duration);
-            RebuildAutomaticTiming();
+            RequestRebuild();
         }
 
         public void SetSoftPointsEnabled(bool value)
         {
             if (softPointsEnabled == value) return;
             softPointsEnabled = value;
-            RebuildAutomaticTiming();
+            RequestRebuild();
         }
 
         public void SetSoftPointWindows(float incomingPercent, float outgoingPercent)
@@ -79,7 +124,29 @@ namespace UltraCinematic.Timeline
                 float.IsNaN(outgoingPercent) || float.IsInfinity(outgoingPercent)) return;
             softPointIncoming = Mathf.Clamp(incomingPercent, 1f, 45f) / 100f;
             softPointOutgoing = Mathf.Clamp(outgoingPercent, 1f, 45f) / 100f;
-            RebuildAutomaticTiming();
+            RequestRebuild();
+        }
+
+        internal void BeginBatchUpdate()
+        {
+            batchUpdateDepth++;
+        }
+
+        internal void EndBatchUpdate()
+        {
+            if (batchUpdateDepth <= 0) return;
+            batchUpdateDepth--;
+            if (batchUpdateDepth == 0 && rebuildPending)
+            {
+                rebuildPending = false;
+                RebuildAutomaticTiming();
+            }
+        }
+
+        private void RequestRebuild()
+        {
+            if (batchUpdateDepth > 0) rebuildPending = true;
+            else RebuildAutomaticTiming();
         }
 
         public void RebuildAutomaticTiming()
@@ -165,26 +232,6 @@ namespace UltraCinematic.Timeline
         }
     }
 
-    public static class Easing
-    {
-        public static float Apply(EasingType type, float t)
-        {
-            switch (type) { case EasingType.EaseIn: return t * t; case EasingType.EaseOut: return 1f - (1f - t) * (1f - t); case EasingType.EaseInOut: return Mathf.SmoothStep(0f, 1f, t); default: return t; }
-        }
-
-        public static float ApplyContinuous(EasingType type, float t)
-        {
-            float envelope = t * t * (1f - t) * (1f - t);
-            switch (type)
-            {
-                case EasingType.EaseIn: return Mathf.Clamp01(t - envelope);
-                case EasingType.EaseOut: return Mathf.Clamp01(t + envelope);
-                case EasingType.EaseInOut: return Mathf.Clamp01(t + envelope * (2f * t - 1f) * 2f);
-                default: return t;
-            }
-        }
-    }
-
     public static class TimelineEvaluator
     {
         private const float DerivativeStep = .005f;
@@ -197,8 +244,7 @@ namespace UltraCinematic.Timeline
             TimelineSegment segment = timeline.GetSegment(index);
             float span = segment.To.Time - segment.From.Time;
             float normalizedTime = span <= 0f ? 0f : Mathf.Clamp01((time - segment.From.Time) / span);
-            float distanceFraction = segment.PathType == PathType.Smooth ? Easing.ApplyContinuous(segment.EasingType, normalizedTime) : Easing.Apply(segment.EasingType, normalizedTime);
-            float t = timeline.GetPathParameter(index, distanceFraction);
+            float t = timeline.GetPathParameter(index, normalizedTime);
             CameraPoint a = segment.From.Point, b = segment.To.Point;
             Vector3 position = EvaluatePositionRaw(timeline, index, t);
             Quaternion rotation = segment.PathType == PathType.Smooth ? SmoothRotation(timeline, index, t) : Quaternion.Slerp(a.Rotation, b.Rotation, t);

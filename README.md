@@ -8,17 +8,19 @@
 
 ### Возможности
 
-- создание и удаление Camera Points прямо во время игры;
+- создание, вставка и удаление Camera Points прямо во время игры;
 - визуализация точек, направления камеры и маршрута в мире;
 - Timeline с предпросмотром любого кадра;
 - редактирование Position X/Y/Z, Rotation Pitch/Yaw/Roll и FOV каждой точки;
 - индивидуальные `Linear`, `Bezier` и `Smooth` Path для сегментов;
-- индивидуальные режимы Easing;
 - единое Flight Time для всего маршрута и автоматическое распределение времени по измеренной длине кривой;
 - Soft Points с настраиваемыми окнами до и после внутренних точек;
+- удаление выбранной точки, сдвиг всего маршрута по X/Y/Z и сворачиваемые панели редактора;
+- вставка следующей создаваемой точки перед первой точкой или внутрь выбранного сегмента;
 - воспроизведение в работающем или полностью замороженном мире;
 - `Pause Game` с отдельным свободным перемещением камеры на остановленном времени;
 - именованные сохранения Timeline, привязанные к конкретному уровню;
+- глобальные пресеты маршрутов с размещением относительно текущей позиции игрока;
 - загрузка, перезапись, удаление и безопасная очистка проектов;
 - интерфейс на русском и английском языках;
 - стили Timeline `Classic` и `Dark`;
@@ -38,7 +40,9 @@ Edit Mode не включает Noclip, не скрывает HUD и не мен
 
 ### Timeline и плавность
 
-Точки отображаются кружками и нумеруются с 1, а сегменты обозначаются буквами начиная с A. Время отдельных сегментов рассчитывается автоматически по фактической длине кривой, поэтому при `Easing: Linear` базовая пространственная скорость остаётся равномерной.
+Точки отображаются кружками и нумеруются с 1, а сегменты обозначаются буквами начиная с A. Время отдельных сегментов рассчитывается автоматически по фактической длине кривой, поэтому базовая пространственная скорость остаётся равномерной.
+
+Кнопки `+` со стрелками `▼` задают место для следующей создаваемой Camera Point. Кнопка перед первой точкой вставляет новую точку в начало, а кнопка над сегментом разделяет этот сегмент на два. Если место вставки не выбрано, **Add Camera Point** добавляет точку в конец маршрута. Выбранную точку можно удалить непосредственно из панели её параметров; остальные точки автоматически перенумеровываются.
 
 Soft Points работают с любым сочетанием Path. Для внутренних точек можно задать процент сглаживания до и после точки в диапазоне 1–45%. Переход строится кривой пятой степени с непрерывными скоростью и ускорением. Первая и последняя точки всегда остаются точными.
 
@@ -52,7 +56,9 @@ Soft Points работают с любым сочетанием Path. Для в�
 
 ### Сохранения
 
-Кнопки `SAVE`, `LOAD` и `CLEAR` находятся в верхней части Timeline. Проект сохраняет все точки, Position/Rotation/FOV, Path/Easing, Flight Time, режим времени и Soft Points.
+Кнопки `SAVE AS`, `LOAD`, `PRESETS` и `CLEAR` находятся в верхней части Timeline. Проект сохраняет все точки, Position/Rotation/FOV, Path, Flight Time, режим времени и Soft Points.
+
+`SAVE AS` позволяет сохранить маршрут как проект текущего уровня или как глобальный пресет. Проекты уровня нельзя загрузить на другой карте. Пресет доступен на любой карте: позиции его точек хранятся относительно камеры в момент сохранения, поэтому при загрузке маршрут появляется перед игроком в новом месте. Проекты и пресеты можно загружать, перезаписывать и удалять из соответствующих списков.
 
 По умолчанию сейвы хранятся в:
 
@@ -61,6 +67,8 @@ BepInEx/config/UltraCinematic/Timelines
 ```
 
 Каждый проект привязан к идентификатору активного уровня. Сейвы другого уровня не отображаются и не могут быть загружены. Перед загрузкой файл полностью проверяется, и только затем текущий Timeline заменяется.
+
+Основная часть Timeline прокручивается колесом мыши, а панели настроек сегмента, точки, перемещения всего маршрута и параметров пролётки можно сворачивать. Пока Timeline открыт, игровой ввод полностью блокируется, поэтому клики по редактору не вызывают стрельбу или другие действия игрока.
 
 ### Настройки интерфейса
 
@@ -98,17 +106,19 @@ dotnet build -c Release -p:GameDir="D:\Games\ULTRAKILL"
 
 ### Features
 
-- create and remove Camera Points in game;
+- create, insert, and remove Camera Points in game;
 - visualize points, camera direction, and the complete route in world space;
 - Timeline with live preview at any frame;
 - edit Position X/Y/Z, Rotation Pitch/Yaw/Roll, and FOV for every point;
 - independent `Linear`, `Bezier`, and `Smooth` Path modes per segment;
-- independent Easing modes;
 - one total Flight Time with automatic timing based on measured curve length;
 - configurable Soft Point windows before and after internal points;
+- delete the selected point, move the entire route on X/Y/Z, and collapse editor panels;
+- insert the next Camera Point before Point 1 or inside a selected segment;
 - playback in a live or completely frozen world;
 - `Pause Game` with a separate free-camera controller on frozen time;
 - named, level-specific Timeline saves;
+- global route presets positioned relative to the player's current location;
 - load, overwrite, delete, and safely clear projects;
 - complete English and Russian interfaces;
 - `Classic` and `Dark` Timeline styles;
@@ -128,7 +138,9 @@ Edit Mode does not enable Noclip, hide the HUD, or modify weapons. Those remain 
 
 ### Timeline and smoothing
 
-Points are circular and numbered from 1. Segments are lettered from A. Individual segment time is derived automatically from measured curve length, keeping the base spatial speed uniform when `Easing: Linear` is selected.
+Points are circular and numbered from 1. Segments are lettered from A. Individual segment time is derived automatically from measured curve length, keeping the base spatial speed uniform.
+
+The `+` controls with `▼` indicators choose where the next Camera Point will be created. The control before Point 1 inserts a new first point, while a control above a segment splits that segment in two. With no insertion control selected, **Add Camera Point** appends to the end of the route. The selected point can be deleted from its settings panel, and all remaining points are renumbered automatically.
 
 Soft Points work with every Path combination. Internal points expose independent 1–45% smoothing windows before and after the point. A quintic transition maintains continuous velocity and acceleration, while the first and last points always remain exact.
 
@@ -142,7 +154,9 @@ When the Timeline is opened from an active `Pause Game`, the frozen state is res
 
 ### Saves
 
-The Timeline header contains `SAVE`, `LOAD`, and `CLEAR`. A project stores all points, Position/Rotation/FOV values, Path/Easing modes, Flight Time, time mode, and Soft Point settings.
+The Timeline header contains `SAVE AS`, `LOAD`, `PRESETS`, and `CLEAR`. A project stores all points, Position/Rotation/FOV values, Path modes, Flight Time, time mode, and Soft Point settings.
+
+`SAVE AS` can create either a project for the current level or a global preset. Level projects cannot be loaded on another map. A preset is available everywhere: its points are stored relative to the camera at save time, so loading places the route in front of the player at the new location. Projects and presets can be loaded, overwritten, or deleted from their respective lists.
 
 By default, save files are stored under:
 
@@ -151,6 +165,8 @@ BepInEx/config/UltraCinematic/Timelines
 ```
 
 Each project is bound to the active level identity. Saves from another level are neither listed nor loadable. A file is fully validated before it can replace the current in-memory Timeline.
+
+The main Timeline content is mouse-wheel scrollable. Segment, point, Move All, and cinematic settings panels can be collapsed. Gameplay input is fully captured while the Timeline is open, preventing editor clicks from firing weapons or triggering other player actions.
 
 ### Interface settings
 

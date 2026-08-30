@@ -11,19 +11,28 @@ namespace UltraCinematic.Visualization
         private CinematicController controller;
         private GameObject root;
         private Mesh coneMesh;
+        private Material pointMaterial;
+        private Material routeMaterial;
+        private Material coneMaterial;
+        private Transform cursor;
         private readonly List<GameObject> objects = new List<GameObject>();
         private readonly List<Transform> labels = new List<Transform>();
         public void Initialize(CinematicController value) { controller = value; }
         public void Show() { EnsureRoot(); Rebuild(); }
-        public void Hide() { if (root != null) Destroy(root); root = null; objects.Clear(); labels.Clear(); }
+        public void Hide() { if (root != null) Destroy(root); root = null; cursor = null; objects.Clear(); labels.Clear(); }
         private void EnsureRoot() { if (root == null) root = new GameObject("UltraCinematic Visualization"); }
         public void Rebuild()
         {
             if (!controller.EditModeEnabled || controller.PlaybackActive) return; EnsureRoot();
-            foreach (GameObject item in objects) if (item != null) Destroy(item); objects.Clear(); labels.Clear();
+            EnsureMaterials();
+            foreach (GameObject item in objects) if (item != null) Destroy(item); objects.Clear(); labels.Clear(); cursor = null;
             for (int i = 0; i < controller.Timeline.Points.Count; i++) Marker(controller.Timeline.Points[i], i + 1);
             for (int i = 0; i < controller.Timeline.SegmentCount; i++) Line(controller.Timeline.GetSegment(i), i);
             if (controller.Timeline.Keyframes.Count > 0) Marker(TimelineEvaluator.Evaluate(controller.Timeline, controller.Timeline.CursorTime).Position, .1f, Color.cyan, null);
+        }
+        internal void UpdateCursor(Vector3 position)
+        {
+            if (cursor != null) cursor.position = position;
         }
         private void LateUpdate()
         {
@@ -40,12 +49,13 @@ namespace UltraCinematic.Visualization
         private void Marker(Vector3 position, float scale, Color color, string label)
         {
             GameObject marker = GameObject.CreatePrimitive(PrimitiveType.Sphere); marker.name = label == null ? "Timeline Cursor" : "Camera Point " + label; marker.transform.SetParent(root.transform); marker.transform.position = position; marker.transform.localScale = Vector3.one * scale;
-            Collider collider = marker.GetComponent<Collider>(); if (collider != null) Destroy(collider); marker.GetComponent<Renderer>().material.color = color; objects.Add(marker);
+            Collider collider = marker.GetComponent<Collider>(); if (collider != null) Destroy(collider); marker.GetComponent<Renderer>().sharedMaterial = label == null ? routeMaterial : pointMaterial; objects.Add(marker);
+            if (label == null) cursor = marker.transform;
             if (label != null) AddLabel("Point Label " + label, label, position + Vector3.up * .28f, color);
         }
         private void Line(TimelineSegment segment, int index)
         {
-            GameObject go = new GameObject("Cinematic Segment " + SegmentLabel(index)); go.transform.SetParent(root.transform); LineRenderer line = go.AddComponent<LineRenderer>(); line.useWorldSpace = true; line.widthMultiplier = .035f; line.material = new Material(Shader.Find("Sprites/Default")); line.startColor = line.endColor = Color.cyan;
+            GameObject go = new GameObject("Cinematic Segment " + SegmentLabel(index)); go.transform.SetParent(root.transform); LineRenderer line = go.AddComponent<LineRenderer>(); line.useWorldSpace = true; line.widthMultiplier = .035f; line.sharedMaterial = routeMaterial; line.startColor = line.endColor = Color.cyan;
             int count = segment.PathType == PathType.Linear ? 2 : 32; line.positionCount = count;
             float start = segment.From.Time, duration = segment.To.Time - start;
             for (int i = 0; i < count; i++) line.SetPosition(i, TimelineEvaluator.Evaluate(controller.Timeline, start + duration * i / (count - 1f)).Position);
@@ -60,8 +70,22 @@ namespace UltraCinematic.Visualization
             cone.transform.SetParent(root.transform);
             cone.transform.SetPositionAndRotation(point.Position, point.Rotation);
             MeshFilter filter = cone.AddComponent<MeshFilter>(); filter.sharedMesh = coneMesh;
-            MeshRenderer renderer = cone.AddComponent<MeshRenderer>(); renderer.material = new Material(Shader.Find("Sprites/Default")); renderer.material.color = new Color(1f, .75f, .1f, .85f);
+            MeshRenderer renderer = cone.AddComponent<MeshRenderer>(); renderer.sharedMaterial = coneMaterial;
             objects.Add(cone);
+        }
+
+        private void EnsureMaterials()
+        {
+            Shader shader = Shader.Find("Sprites/Default");
+            if (pointMaterial == null) pointMaterial = CreateMaterial(shader, "UltraCinematic Point Material", Color.yellow);
+            if (routeMaterial == null) routeMaterial = CreateMaterial(shader, "UltraCinematic Route Material", Color.cyan);
+            if (coneMaterial == null) coneMaterial = CreateMaterial(shader, "UltraCinematic Cone Material", new Color(1f, .75f, .1f, .85f));
+        }
+
+        private static Material CreateMaterial(Shader shader, string name, Color color)
+        {
+            Material material = new Material(shader) { name = name, color = color };
+            return material;
         }
         private void AddLabel(string name, string value, Vector3 position, Color color)
         {
@@ -83,6 +107,14 @@ namespace UltraCinematic.Visualization
                 triangles[offset + 3] = sides + 1; triangles[offset + 4] = i + 1; triangles[offset + 5] = next;
             }
             Mesh mesh = new Mesh { name = "UltraCinematic Direction Cone", vertices = vertices, triangles = triangles }; mesh.RecalculateNormals(); mesh.RecalculateBounds(); return mesh;
+        }
+        private void OnDestroy()
+        {
+            Hide();
+            if (coneMesh != null) Destroy(coneMesh);
+            if (pointMaterial != null) Destroy(pointMaterial);
+            if (routeMaterial != null) Destroy(routeMaterial);
+            if (coneMaterial != null) Destroy(coneMaterial);
         }
         private static string SegmentLabel(int index) { index++; string result = ""; while (index > 0) { index--; result = (char)('A' + index % 26) + result; index /= 26; } return result; }
     }

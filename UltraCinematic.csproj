@@ -4,9 +4,9 @@
     <LangVersion>7.3</LangVersion>
     <RootNamespace>UltraCinematic</RootNamespace>
     <AssemblyName>UltraCinematic</AssemblyName>
-    <Version>1.5.1</Version>
-    <AssemblyVersion>1.5.1.0</AssemblyVersion>
-    <FileVersion>1.5.1.0</FileVersion>
+    <Version>1.6.0</Version>
+    <AssemblyVersion>1.6.0.0</AssemblyVersion>
+    <FileVersion>1.6.0.0</FileVersion>
     <GameDir Condition="'$(GameDir)' == ''">$(ULTRAKILL_DIR)</GameDir>
     <BepInExDir Condition="'$(BepInExDir)' == ''">$(GameDir)\BepInEx</BepInExDir>
     <ManagedDir Condition="'$(ManagedDir)' == ''">$(GameDir)\ULTRAKILL_Data\Managed</ManagedDir>

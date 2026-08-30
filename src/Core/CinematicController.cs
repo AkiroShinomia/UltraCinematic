@@ -28,6 +28,10 @@ namespace UltraCinematic.Core
         private float timeScaleBeforeFrozenPlayback = 1f;
         private bool restorePhotoPauseAfterPlayback;
         private bool restorePhotoPauseAfterTimeline;
+        private PlayerInput timelineInputSource;
+        private bool timelineInputWasEnabled;
+        private bool pendingTimelineInputRestore;
+        private int pendingInsertSegment = -1;
         private bool initialized;
 
         public bool EditModeEnabled { get; private set; }
@@ -37,6 +41,7 @@ namespace UltraCinematic.Core
         public bool TimelineOpen => timelineUi != null && timelineUi.IsOpen;
         internal CinematicCheatMenuCoordinator MenuCoordinator => menuCoordinator;
         internal bool OwnsCamera => PlaybackActive || previewActive || PhotoPauseActive;
+        internal int PendingInsertSegment => pendingInsertSegment;
 
         internal void Initialize(ManualLogSource logger)
         {
@@ -89,21 +94,75 @@ namespace UltraCinematic.Core
                 if (!ResolveCamera()) return;
                 pointState = new CameraState(camera.transform.position, camera.transform.rotation, camera.fieldOfView);
             }
-            Timeline.Add(new CameraPoint { Position = pointState.Position, Rotation = pointState.Rotation, FieldOfView = pointState.FieldOfView });
-            Timeline.CursorTime = Timeline.Duration;
+            CameraPoint point = new CameraPoint { Position = pointState.Position, Rotation = pointState.Rotation, FieldOfView = pointState.FieldOfView };
+            int insertedPoint = Timeline.Points.Count;
+            if (pendingInsertSegment == -2 && Timeline.InsertBeforeFirst(point))
+            {
+                insertedPoint = 0;
+                pendingInsertSegment = -1;
+                Timeline.CursorTime = 0f;
+                timelineUi.NotifyPointInserted(insertedPoint, true, true);
+                log.LogInfo("Inserted Camera Point 1 before the previous first point.");
+            }
+            else if (pendingInsertSegment >= 0 && Timeline.InsertAfterSegment(pendingInsertSegment, point))
+            {
+                insertedPoint = pendingInsertSegment + 1;
+                pendingInsertSegment = -1;
+                Timeline.CursorTime = Timeline.Keyframes[insertedPoint].Time;
+                timelineUi.NotifyPointInserted(insertedPoint, true);
+                log.LogInfo("Inserted Camera Point " + (insertedPoint + 1) + ".");
+            }
+            else
+            {
+                pendingInsertSegment = -1;
+                Timeline.Add(point);
+                Timeline.CursorTime = Timeline.Duration;
+                timelineUi.NotifyPointInserted(insertedPoint, false);
+                log.LogInfo("Added Camera Point " + Timeline.Points.Count + ".");
+            }
             visualizer.Rebuild();
             menuCoordinator.RequestRefresh();
-            log.LogInfo("Added Camera Point " + Timeline.Points.Count + ".");
         }
 
         public void DeleteLastPoint()
         {
             if (!EditModeEnabled || PlaybackActive) return;
             if (!Timeline.RemoveLast()) { log.LogWarning("Delete Last Point ignored: timeline is empty."); return; }
+            pendingInsertSegment = -1;
             ReleasePreview();
             visualizer.Rebuild();
             menuCoordinator.RequestRefresh();
             log.LogInfo("Deleted last Camera Point. Remaining: " + Timeline.Points.Count + ".");
+        }
+
+        internal bool DeleteCameraPoint(int pointIndex)
+        {
+            if (!EditModeEnabled || PlaybackActive || !Timeline.RemoveAt(pointIndex)) return false;
+            pendingInsertSegment = -1;
+            ReleasePreview();
+            visualizer.Rebuild();
+            menuCoordinator.RequestRefresh();
+            log.LogInfo("Deleted Camera Point " + (pointIndex + 1) + ". Remaining: " + Timeline.Points.Count + ".");
+            return true;
+        }
+
+        internal bool ArmPointInsertion(int segmentIndex)
+        {
+            if (!EditModeEnabled || PlaybackActive || segmentIndex < 0 || segmentIndex >= Timeline.SegmentCount) return false;
+            pendingInsertSegment = segmentIndex;
+            return true;
+        }
+
+        internal bool ArmPointInsertionBeforeFirst()
+        {
+            if (!EditModeEnabled || PlaybackActive || Timeline.Points.Count == 0) return false;
+            pendingInsertSegment = -2;
+            return true;
+        }
+
+        internal void CancelPointInsertion()
+        {
+            pendingInsertSegment = -1;
         }
 
         public void ToggleTimeline()
@@ -231,7 +290,7 @@ namespace UltraCinematic.Core
             playerPlayback.Follow(cameraTarget);
             camera.transform.SetPositionAndRotation(cameraTarget.Position, cameraTarget.Rotation);
             camera.fieldOfView = cameraTarget.FieldOfView;
-            visualizer.Rebuild();
+            visualizer.UpdateCursor(cameraTarget.Position);
         }
 
         internal void PreviewCameraPoint(CameraPoint point)
@@ -241,7 +300,7 @@ namespace UltraCinematic.Core
             playerPlayback.Follow(cameraTarget);
             camera.transform.SetPositionAndRotation(cameraTarget.Position, cameraTarget.Rotation);
             camera.fieldOfView = cameraTarget.FieldOfView;
-            visualizer.Rebuild();
+            visualizer.UpdateCursor(cameraTarget.Position);
         }
 
         internal void EndTimelinePreview()
@@ -249,13 +308,15 @@ namespace UltraCinematic.Core
             if (!previewActive) return;
             previewActive = false;
             playerPlayback.Restore();
-            visualizer.Rebuild();
+            if (Timeline.Keyframes.Count > 0)
+                visualizer.UpdateCursor(TimelineEvaluator.Evaluate(Timeline, Timeline.CursorTime).Position);
         }
 
         internal void ReleasePreview() => EndTimelinePreview();
         internal void RefreshVisualization() => visualizer.Rebuild();
         internal void NotifyTimelineProjectChanged()
         {
+            pendingInsertSegment = -1;
             EndTimelinePreview();
             visualizer.Rebuild();
             menuCoordinator.RequestRefresh();
@@ -266,8 +327,22 @@ namespace UltraCinematic.Core
             menuCoordinator.RequestRefresh();
         }
 
+        internal bool TryGetPresetAnchor(out Vector3 anchor)
+        {
+            anchor = Vector3.zero;
+            if (PhotoPauseActive)
+            {
+                anchor = photoPause.CameraState.Position;
+                return true;
+            }
+            if (!ResolveCamera()) return false;
+            anchor = camera.transform.position;
+            return true;
+        }
+
         private void Update()
         {
+            RestoreTimelineInputIfReady();
             if (PhotoPauseActive)
             {
                 cameraTarget = photoPause.Tick();
@@ -300,6 +375,7 @@ namespace UltraCinematic.Core
             EditModeEnabled = false;
             previewActive = false;
             Timeline.Clear();
+            pendingInsertSegment = -1;
             visualizer.Hide();
             camera = null;
             menuCoordinator.RequestRefresh();
@@ -336,6 +412,7 @@ namespace UltraCinematic.Core
                     cursorLock = LockMode.Unlock,
                     timerModifier = 0f
                 });
+            CaptureAndDisableTimelineInput();
             timelineUi.Open();
         }
 
@@ -348,6 +425,42 @@ namespace UltraCinematic.Core
             if (GameStateManager.Instance != null && GameStateManager.Instance.IsStateActive(TimelineStateKey))
                 GameStateManager.Instance.PopState(TimelineStateKey);
             Time.timeScale = timeScaleBeforeTimeline;
+            QueueTimelineInputRestore();
+        }
+
+        private void CaptureAndDisableTimelineInput()
+        {
+            RestoreTimelineInputNow();
+            InputManager inputManager = MonoSingleton<InputManager>.Instance;
+            timelineInputSource = inputManager == null ? null : inputManager.InputSource;
+            timelineInputWasEnabled = timelineInputSource != null && timelineInputSource.Actions != null && timelineInputSource.Actions.asset.enabled;
+            pendingTimelineInputRestore = false;
+            if (timelineInputSource != null) timelineInputSource.Disable();
+        }
+
+        private void QueueTimelineInputRestore()
+        {
+            if (timelineInputSource == null) return;
+            pendingTimelineInputRestore = timelineInputWasEnabled;
+            if (!timelineInputWasEnabled)
+            {
+                timelineInputSource = null;
+                timelineInputWasEnabled = false;
+            }
+        }
+
+        private void RestoreTimelineInputIfReady()
+        {
+            if (!pendingTimelineInputRestore || PlaybackActive || Input.GetMouseButton(0)) return;
+            RestoreTimelineInputNow();
+        }
+
+        private void RestoreTimelineInputNow()
+        {
+            if (timelineInputSource != null && timelineInputWasEnabled) timelineInputSource.Enable();
+            timelineInputSource = null;
+            timelineInputWasEnabled = false;
+            pendingTimelineInputRestore = false;
         }
 
         private void ExitPlaybackGameState()
@@ -362,6 +475,7 @@ namespace UltraCinematic.Core
             if (PlaybackActive) StopPlayback();
             DisablePhotoPause();
             CloseTimeline();
+            RestoreTimelineInputNow();
         }
     }
 }
