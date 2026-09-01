@@ -372,6 +372,7 @@ namespace UltraCinematic.Core
             if (PlaybackActive) StopPlayback();
             DisablePhotoPause();
             CloseTimeline();
+            RestoreTimelineInputNow();
             EditModeEnabled = false;
             previewActive = false;
             Timeline.Clear();
@@ -380,6 +381,21 @@ namespace UltraCinematic.Core
             camera = null;
             menuCoordinator.RequestRefresh();
             log.LogInfo("Cleared cinematic timeline for scene change.");
+        }
+
+        internal void PrepareForSameLevelReload()
+        {
+            restorePhotoPauseAfterTimeline = false;
+            restorePhotoPauseAfterPlayback = false;
+            if (PlaybackActive) StopPlayback();
+            DisablePhotoPause();
+            CloseTimeline();
+            RestoreTimelineInputNow();
+            previewActive = false;
+            camera = null;
+            visualizer.Hide();
+            if (EditModeEnabled) visualizer.Show();
+            menuCoordinator.RequestRefresh();
         }
 
         private bool ResolveCamera()

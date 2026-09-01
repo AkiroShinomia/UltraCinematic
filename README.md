@@ -25,6 +25,7 @@
 - интерфейс на русском и английском языках;
 - стили Timeline `Classic` и `Dark`;
 - меню настроек с изменяемой папкой сохранений.
+- сохранение текущих точек и Timeline после смерти или перезапуска уровня; очистка выполняется только при выходе с уровня.
 
 ### Использование
 
@@ -123,6 +124,7 @@ dotnet build -c Release -p:GameDir="D:\Games\ULTRAKILL"
 - complete English and Russian interfaces;
 - `Classic` and `Dark` Timeline styles;
 - a settings menu with a configurable save directory.
+- preservation of the current Camera Points and Timeline after death or a same-level restart; data is cleared only after leaving the level.
 
 ### Usage
 

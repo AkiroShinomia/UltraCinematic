@@ -11,7 +11,7 @@ namespace UltraCinematic
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     public sealed class UltraCinematicPlugin : BaseUnityPlugin
     {
-        public const string PluginGuid = "kiril.ultracinematic"; public const string PluginName = "UltraCinematic"; public const string PluginVersion = "1.6.0";
+        public const string PluginGuid = "kiril.ultracinematic"; public const string PluginName = "UltraCinematic"; public const string PluginVersion = "1.6.1";
         internal static CinematicController Controller { get; private set; } internal static ManualLogSource Log { get; private set; }
         internal static UltraCinematicPreferences Preferences { get; private set; }
         private Harmony harmony;
