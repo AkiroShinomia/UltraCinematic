@@ -4,6 +4,8 @@
 
 UltraCinematic — инструмент для создания плавных кинематографических пролётов в ULTRAKILL. Мод использует штатную камеру игрока и полностью встраивается в `MANAGE CHEATS` отдельной категорией **CINEMATIC**.
 
+![Демонстрация UltraCinematic](https://raw.githubusercontent.com/AkiroShinomia/UltraCinematic/main/media/demo.gif)
+
 ## Возможности
 
 - создание, вставка, удаление и перемещение Camera Points прямо в игре;
