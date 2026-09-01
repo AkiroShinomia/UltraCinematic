@@ -1,9 +1,0 @@
-{
-  "name": "UltraCinematic",
-  "version_number": "1.6.1",
-  "website_url": "https://github.com/AkiroShinomia/UltraCinematic",
-  "description": "Create smooth cinematic camera paths in ULTRAKILL with an in-game timeline, point editing, frozen-world playback, level saves, reusable presets, and bilingual UI.",
-  "dependencies": [
-    "BepInEx-BepInExPack-5.4.2305"
-  ]
-}
